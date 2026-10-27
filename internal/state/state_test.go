@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -71,6 +72,40 @@ func TestEncodeDecode(t *testing.T) {
 	if !got.Initialized || got.FirstSeen("a|CVE-1") != 0 || got.Digest.SentAt != t0.Unix() || got.Digest.Findings["k"].Stage != "unfixed" {
 		t.Errorf("round trip lost something: %+v", got)
 	}
+	if _, err := Decode([]byte("not gzip")); err == nil {
+		t.Error("Decode of garbage succeeded")
+	}
+}
+
+// The requests to vuln-responder survive a restart (ADR 0009).
+func TestEncodeDecodeRequests(t *testing.T) {
+	s := New()
+	s.Requests["source:yuanying/hshelf"] = Request{
+		TargetType: "source", Target: "yuanying/hshelf", ContextID: "ctx-1", TaskID: "task-1", State: "working",
+		Asked: []string{"a|CVE-1|json"}, Sending: []string{"a|CVE-1|json", "a|CVE-2|json"},
+		PR: "https://github.com/yuanying/fleet-infra/pull/1", Summary: "s", Attempts: 2, NextAttempt: 5, SentAt: 3, UpdatedAt: 4,
+	}
+	b, err := Encode(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Decode(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Requests, s.Requests) {
+		t.Errorf("round trip: %+v", got.Requests)
+	}
+	// A state written before requests existed decodes with none.
+	old := New()
+	old.Requests = nil
+	b, _ = Encode(old)
+	if got, _ := Decode(b); got.Requests == nil {
+		t.Error("Requests is nil after decoding an older state")
+	}
+}
+
+func TestDecodeGarbage(t *testing.T) {
 	if _, err := Decode([]byte("not gzip")); err == nil {
 		t.Error("Decode of garbage succeeded")
 	}

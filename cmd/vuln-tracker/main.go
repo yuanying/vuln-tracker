@@ -17,6 +17,7 @@ import (
 	// are read in a named time zone.
 	_ "time/tzdata"
 
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -35,6 +36,7 @@ import (
 	"github.com/yuanying/vuln-tracker/internal/digest"
 	"github.com/yuanying/vuln-tracker/internal/github"
 	"github.com/yuanying/vuln-tracker/internal/registry"
+	"github.com/yuanying/vuln-tracker/internal/responder"
 	"github.com/yuanying/vuln-tracker/internal/scanner"
 	"github.com/yuanying/vuln-tracker/internal/state"
 	"github.com/yuanying/vuln-tracker/internal/tracker"
@@ -83,9 +85,10 @@ func run(args []string) error {
 	if err := mgr.Add(t); err != nil {
 		return fmt.Errorf("adding the tracker: %w", err)
 	}
-	ctrlmetrics.Registry.MustRegister(&tracker.Collector{DetailSeverities: cfg.DetailSeverities, Snapshot: t.Snapshot})
+	ctrlmetrics.Registry.MustRegister(&tracker.Collector{DetailSeverities: cfg.DetailSeverities, Snapshot: t.Snapshot, Requests: t.ResponderRequests})
 
-	log.Info("starting", "trivyServer", cfg.TrivyServer, "fleetInfra", cfg.FleetInfra.Name, "detailSeverities", cfg.DetailSeverities)
+	log.Info("starting", "trivyServer", cfg.TrivyServer, "fleetInfra", cfg.FleetInfra.Name, "detailSeverities", cfg.DetailSeverities,
+		"responder", cfg.ResponderURL, "responderMode", cfg.ResponderMode)
 	return mgr.Start(ctrl.SetupSignalHandler())
 }
 
@@ -135,10 +138,11 @@ func newTracker(mgr manager.Manager, cfg config.Config) *tracker.Tracker {
 			TempDir:   cfg.TrivyTempDir,
 			Timeout:   cfg.ScanTimeout,
 		},
-		GitHub:  &github.Client{Token: cfg.GitHubToken, HTTP: &http.Client{Timeout: 2 * time.Minute}},
-		Slack:   slack,
-		Metrics: tracker.NewMetrics(ctrlmetrics.Registry),
-		Log:     ctrl.Log.WithName("tracker"),
+		GitHub:    &github.Client{Token: cfg.GitHubToken, HTTP: &http.Client{Timeout: 2 * time.Minute}},
+		Slack:     slack,
+		Responder: newResponder(cfg, ctrl.Log.WithName("responder")),
+		Metrics:   tracker.NewMetrics(ctrlmetrics.Registry),
+		Log:       ctrl.Log.WithName("tracker"),
 		Config: tracker.Config{
 			FleetInfra:       cfg.FleetInfra,
 			Manifests:        cfg.Manifests,
@@ -149,7 +153,25 @@ func newTracker(mgr manager.Manager, cfg config.Config) *tracker.Tracker {
 			VEXBaseURL:       cfg.VEXBaseURL,
 			GitInterval:      cfg.GitInterval,
 			ScanInterval:     cfg.ScanInterval,
+
+			ResponderNewWithin:    cfg.ResponderNewWithin,
+			ResponderPollInterval: cfg.ResponderPollInterval,
 		},
+	}
+}
+
+// newResponder is nil unless --responder-url is given: requests to
+// vuln-responder are off by default (ADR 0009).
+func newResponder(cfg config.Config, log logr.Logger) *responder.Requester {
+	if cfg.ResponderURL == "" {
+		return nil
+	}
+	return &responder.Requester{
+		Client:       &responder.Client{URL: cfg.ResponderURL, TokenFile: cfg.ResponderTokenFile, HTTP: &http.Client{Timeout: 30 * time.Second}},
+		Mode:         cfg.ResponderMode,
+		DashboardURL: cfg.DashboardURL,
+		TaskTimeout:  cfg.ResponderTaskTimeout,
+		Log:          log,
 	}
 }
 

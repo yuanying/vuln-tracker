@@ -15,6 +15,7 @@ import (
 	"github.com/yuanying/vuln-tracker/internal/digest"
 	"github.com/yuanying/vuln-tracker/internal/github"
 	"github.com/yuanying/vuln-tracker/internal/manifests"
+	"github.com/yuanying/vuln-tracker/internal/responder"
 	"github.com/yuanying/vuln-tracker/internal/scanner"
 	"github.com/yuanying/vuln-tracker/internal/sources"
 	"github.com/yuanying/vuln-tracker/internal/state"
@@ -80,6 +81,12 @@ type Config struct {
 	// run, and how long the scan loop waits when nothing is due. Zero is a
 	// minute.
 	LoopInterval time.Duration
+	// ResponderNewWithin is how recently a finding must have been first
+	// seen to be asked about (ADR 0009).
+	ResponderNewWithin time.Duration
+	// ResponderPollInterval is how often a request is sent or its task
+	// looked at. Zero is LoopInterval.
+	ResponderPollInterval time.Duration
 }
 
 // Tracker runs the loops. It is one manager Runnable (ADR 0001).
@@ -90,10 +97,12 @@ type Tracker struct {
 	Scanner    scanner.Scanner
 	GitHub     github.Repositories
 	// Slack is nil when no webhook is configured: no digest is sent.
-	Slack   Sender
-	Metrics *Metrics
-	Log     logr.Logger
-	Now     func() time.Time
+	Slack Sender
+	// Responder is nil when requests to vuln-responder are off (ADR 0009).
+	Responder *responder.Requester
+	Metrics   *Metrics
+	Log       logr.Logger
+	Now       func() time.Time
 	Config
 
 	trigger chan struct{}
@@ -500,9 +509,10 @@ func (t *Tracker) DigestOnce(ctx context.Context) {
 		return
 	}
 	report := digest.Build(t.digestItems(t.snapshot), t.state.Digest)
+	report.Requests = digestRequests(t.state.Requests, t.state.Digest.SentAt)
 	t.mu.Unlock()
 
-	text := digest.Render(report, digest.Options{DashboardURL: t.DashboardURL, VEXBaseURL: t.VEXBaseURL})
+	text := digest.Render(report, digest.Options{DashboardURL: t.DashboardURL, VEXBaseURL: t.VEXBaseURL, Responder: t.Responder != nil})
 	if err := t.Slack.Send(ctx, text); err != nil {
 		t.Log.Error(err, "sending the weekly digest; retrying later")
 		t.mu.Lock()
@@ -542,6 +552,9 @@ func (t *Tracker) Start(ctx context.Context) error {
 	if t.Slack == nil {
 		t.Log.Info("no Slack webhook is configured; the weekly digest will not be sent")
 	}
+	if t.Responder == nil {
+		t.Log.Info("no vuln-responder is configured; nothing will be asked of it")
+	}
 
 	var wg sync.WaitGroup
 	run := func(f func()) {
@@ -555,6 +568,13 @@ func (t *Tracker) Start(ctx context.Context) error {
 	run(func() { t.every(ctx, t.loopInterval(), t.SyncOnce) })
 	run(func() { t.scanLoop(ctx) })
 	run(func() { t.every(ctx, t.loopInterval(), t.DigestOnce) })
+	if t.Responder != nil {
+		poll := t.ResponderPollInterval
+		if poll <= 0 {
+			poll = t.loopInterval()
+		}
+		run(func() { t.every(ctx, poll, t.RespondOnce) })
+	}
 	<-ctx.Done()
 	wg.Wait()
 	// One last write, so a restart loses as little as possible.
