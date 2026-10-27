@@ -38,6 +38,38 @@ type Digest struct {
 	Findings map[string]Entry `json:"findings"`
 }
 
+// Request is what was asked of vuln-responder for one target, and how it went
+// (ADR 0009).
+type Request struct {
+	// TargetType is "source" or "image".
+	TargetType string `json:"type"`
+	// Target is the source repository or the image name.
+	Target string `json:"target"`
+	// ContextID is the context vuln-responder numbered for the target.
+	ContextID string `json:"contextId,omitempty"`
+	// TaskID is the last task sent.
+	TaskID string `json:"taskId,omitempty"`
+	// State is the task's state, or the tracker's own "error" or "timeout".
+	State string `json:"state,omitempty"`
+	// Asked are the finding keys ("<image>|<vulnerability>|<package>")
+	// already asked about, never to be asked about again.
+	Asked []string `json:"asked,omitempty"`
+	// Sending are the finding keys in the last request.
+	Sending []string `json:"sending,omitempty"`
+	// PR is the pull request the reply named, if any.
+	PR string `json:"pr,omitempty"`
+	// Summary is the first line of the reply.
+	Summary string `json:"summary,omitempty"`
+	// Attempts counts the failures in a row; NextAttempt is when to try
+	// again, in unix seconds.
+	Attempts    int   `json:"attempts,omitempty"`
+	NextAttempt int64 `json:"next,omitempty"`
+	// SentAt is when the last request was sent, and UpdatedAt when the state
+	// last changed, in unix seconds.
+	SentAt    int64 `json:"sentAt,omitempty"`
+	UpdatedAt int64 `json:"updatedAt,omitempty"`
+}
+
 // State is everything kept in the ConfigMap.
 type State struct {
 	// Initialized is false until the first observation. That first one is
@@ -45,11 +77,13 @@ type State struct {
 	Initialized bool            `json:"initialized"`
 	Seen        map[string]Seen `json:"seen"`
 	Digest      Digest          `json:"digest"`
+	// Requests are keyed by target key.
+	Requests map[string]Request `json:"requests,omitempty"`
 }
 
 // New returns an empty state.
 func New() *State {
-	return &State{Seen: map[string]Seen{}, Digest: Digest{Findings: map[string]Entry{}}}
+	return &State{Seen: map[string]Seen{}, Digest: Digest{Findings: map[string]Entry{}}, Requests: map[string]Request{}}
 }
 
 // Observe records the image × vulnerability keys present in production now,
@@ -120,6 +154,9 @@ func Decode(b []byte) (*State, error) {
 	}
 	if s.Digest.Findings == nil {
 		s.Digest.Findings = map[string]Entry{}
+	}
+	if s.Requests == nil {
+		s.Requests = map[string]Request{}
 	}
 	return s, nil
 }

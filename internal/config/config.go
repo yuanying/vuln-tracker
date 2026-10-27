@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -42,6 +43,14 @@ type Config struct {
 	Schedule         digest.Schedule
 	DashboardURL     string
 	VEXBaseURL       string
+
+	// Requests to vuln-responder (ADR 0009). An empty URL turns them off.
+	ResponderURL          string
+	ResponderTokenFile    string
+	ResponderMode         string
+	ResponderNewWithin    time.Duration
+	ResponderTaskTimeout  time.Duration
+	ResponderPollInterval time.Duration
 
 	MetricsAddr string
 	ProbeAddr   string
@@ -84,6 +93,12 @@ func Parse(args []string, getenv func(string) string, extra ...func(*flag.FlagSe
 	sched := fs.String("digest-schedule", "Mon 09:00", "When the weekly digest is sent: a weekday and HH:MM.")
 	fs.StringVar(&c.DashboardURL, "dashboard-url", "", "Grafana dashboard linked from the digest.")
 	fs.StringVar(&c.VEXBaseURL, "vex-base-url", "https://github.com/yuanying/fleet-infra/blob/main/", "Prefix that turns a VEX document's path into a link.")
+	fs.StringVar(&c.ResponderURL, "responder-url", "", "A2A endpoint of vuln-responder. Empty: nothing is asked of it.")
+	fs.StringVar(&c.ResponderTokenFile, "responder-token-file", "/var/run/secrets/a2a/token", "ServiceAccount token for the a2a audience, read for every request.")
+	fs.StringVar(&c.ResponderMode, "responder-mode", "vex-only", "What vuln-responder is asked for: vex-only or fix.")
+	fs.DurationVar(&c.ResponderNewWithin, "responder-new-within", 7*24*time.Hour, "Findings first seen this recently are asked about.")
+	fs.DurationVar(&c.ResponderTaskTimeout, "responder-task-timeout", 3*time.Hour, "How long a vuln-responder task is waited for.")
+	fs.DurationVar(&c.ResponderPollInterval, "responder-poll-interval", time.Minute, "How often a request is sent or its task looked at.")
 	fs.StringVar(&c.MetricsAddr, "metrics-bind-address", ":8080", "Address /metrics is served on.")
 	fs.StringVar(&c.ProbeAddr, "health-probe-bind-address", ":8081", "Address /healthz and /readyz are served on.")
 	fs.BoolVar(&c.LeaderElect, "leader-elect", false, "Use leader election. Off: the tracker runs as one replica (ADR 0001).")
@@ -100,6 +115,26 @@ func Parse(args []string, getenv func(string) string, extra ...func(*flag.FlagSe
 	}
 	if c.ScanTimeout <= 0 {
 		errs = append(errs, errors.New("--scan-timeout must be positive"))
+	}
+	if c.ResponderURL != "" {
+		if u, err := url.Parse(c.ResponderURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			errs = append(errs, fmt.Errorf("--responder-url: %q is not an http(s) URL", c.ResponderURL))
+		}
+	}
+	if c.ResponderMode != "vex-only" && c.ResponderMode != "fix" {
+		errs = append(errs, fmt.Errorf("--responder-mode: %q is not vex-only or fix", c.ResponderMode))
+	}
+	for _, d := range []struct {
+		flag string
+		d    time.Duration
+	}{
+		{"--responder-new-within", c.ResponderNewWithin},
+		{"--responder-task-timeout", c.ResponderTaskTimeout},
+		{"--responder-poll-interval", c.ResponderPollInterval},
+	} {
+		if d.d <= 0 {
+			errs = append(errs, fmt.Errorf("%s must be positive", d.flag))
+		}
 	}
 	var err error
 	if c.FleetInfra, err = parseRepo(*fleet); err != nil {

@@ -40,6 +40,34 @@ func TestDefaults(t *testing.T) {
 	if c.GitHubToken != "" || c.SlackWebhookURL != "" {
 		t.Error("no secrets by default")
 	}
+	// Requests to vuln-responder are off unless a URL is given (ADR 0009).
+	if c.ResponderURL != "" || c.ResponderTokenFile != "/var/run/secrets/a2a/token" || c.ResponderMode != "vex-only" {
+		t.Errorf("responder: %q %q %q", c.ResponderURL, c.ResponderTokenFile, c.ResponderMode)
+	}
+	if c.ResponderNewWithin != 7*24*time.Hour || c.ResponderTaskTimeout != 3*time.Hour || c.ResponderPollInterval != time.Minute {
+		t.Errorf("responder times: %v %v %v", c.ResponderNewWithin, c.ResponderTaskTimeout, c.ResponderPollInterval)
+	}
+}
+
+func TestResponderFlags(t *testing.T) {
+	c, err := Parse([]string{
+		"--namespace=x",
+		"--responder-url=http://vuln-responder.fraction-agents:8080/",
+		"--responder-token-file=/tmp/token",
+		"--responder-mode=fix",
+		"--responder-new-within=72h",
+		"--responder-task-timeout=1h",
+		"--responder-poll-interval=30s",
+	}, env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ResponderURL != "http://vuln-responder.fraction-agents:8080/" || c.ResponderTokenFile != "/tmp/token" || c.ResponderMode != "fix" {
+		t.Errorf("got %+v", c)
+	}
+	if c.ResponderNewWithin != 72*time.Hour || c.ResponderTaskTimeout != time.Hour || c.ResponderPollInterval != 30*time.Second {
+		t.Errorf("got %+v", c)
+	}
 }
 
 func TestFlagsAndSecrets(t *testing.T) {
@@ -87,13 +115,18 @@ func TestNoSecretFlags(t *testing.T) {
 
 func TestInvalid(t *testing.T) {
 	tests := map[string][]string{
-		"no namespace":      {},
-		"bad repo":          {"--namespace=x", "--manifests=nobranch"},
-		"bad severity":      {"--namespace=x", "--detail-severities=urgent"},
-		"bad schedule":      {"--namespace=x", "--digest-schedule=someday"},
-		"bad timezone":      {"--namespace=x", "--timezone=Mars/Base"},
-		"bad renovate re":   {"--namespace=x", "--renovate-author=("},
-		"zero scan timeout": {"--namespace=x", "--scan-timeout=0s"},
+		"no namespace":       {},
+		"bad repo":           {"--namespace=x", "--manifests=nobranch"},
+		"bad severity":       {"--namespace=x", "--detail-severities=urgent"},
+		"bad schedule":       {"--namespace=x", "--digest-schedule=someday"},
+		"bad timezone":       {"--namespace=x", "--timezone=Mars/Base"},
+		"bad renovate re":    {"--namespace=x", "--renovate-author=("},
+		"zero scan timeout":  {"--namespace=x", "--scan-timeout=0s"},
+		"bad responder mode": {"--namespace=x", "--responder-mode=merge"},
+		"bad responder url":  {"--namespace=x", "--responder-url=vuln-responder:8080"},
+		"zero new-within":    {"--namespace=x", "--responder-new-within=0s"},
+		"zero task timeout":  {"--namespace=x", "--responder-task-timeout=0s"},
+		"zero poll interval": {"--namespace=x", "--responder-poll-interval=0s"},
 	}
 	for name, args := range tests {
 		_, err := Parse(args, env(nil))

@@ -4,6 +4,8 @@ import (
 	"strconv"
 
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/yuanying/vuln-tracker/internal/state"
 )
 
 // The metrics are the contract with the dashboard and the alert rules in
@@ -25,6 +27,9 @@ var (
 	candidateInfoDesc = prometheus.NewDesc("vuln_tracker_candidate_info",
 		"A version that may carry fixes for an image running in production. The value is when it was last scanned (unix seconds; 0 if not yet).",
 		[]string{"image", "digest", "candidate", "candidate_tag", "candidate_digest", "revision", "result"}, nil)
+	requestDesc = prometheus.NewDesc("vuln_tracker_responder_request_info",
+		"A request to vuln-responder for one target, as last seen. The value is when its state last changed (unix seconds).",
+		[]string{"target", "target_type", "state", "pr"}, nil)
 	renovateDesc = prometheus.NewDesc("vuln_tracker_image_renovate_pr_info",
 		"An open Renovate pull request that names an image running in production.",
 		[]string{"image", "url"}, nil)
@@ -38,6 +43,8 @@ type Collector struct {
 	DetailSeverities map[string]bool
 	// Snapshot returns the latest evaluation, or false before the first.
 	Snapshot func() (Snapshot, bool)
+	// Requests returns the requests to vuln-responder; nil exports none.
+	Requests func() map[string]state.Request
 }
 
 // Describe implements prometheus.Collector.
@@ -45,6 +52,12 @@ func (c *Collector) Describe(chan<- *prometheus.Desc) {}
 
 // Collect implements prometheus.Collector.
 func (c *Collector) Collect(ch chan<- prometheus.Metric) {
+	if c.Requests != nil {
+		for _, r := range c.Requests() {
+			ch <- prometheus.MustNewConstMetric(requestDesc, prometheus.GaugeValue, float64(r.UpdatedAt),
+				r.Target, r.TargetType, r.State, r.PR)
+		}
+	}
 	snap, ok := c.Snapshot()
 	if !ok {
 		return

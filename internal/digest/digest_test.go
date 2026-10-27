@@ -104,6 +104,31 @@ func TestRender(t *testing.T) {
 	}
 }
 
+func TestRenderRequests(t *testing.T) {
+	r := Build(nil, state.Digest{})
+	if text := Render(r, Options{}); strings.Contains(text, "vuln-responder") {
+		t.Errorf("the section shows while requests are off:\n%s", text)
+	}
+	text := Render(r, Options{Responder: true})
+	if !strings.Contains(text, "*vuln-responder への依頼*（0 件）\nなし") {
+		t.Errorf("no empty section:\n%s", text)
+	}
+	r.Requests = []Request{
+		{Target: "yuanying/hshelf", State: "completed", PR: "https://github.com/yuanying/fleet-infra/pull/240", Summary: "json は上流待ちとして VEX を書いた"},
+		{Target: "index.docker.io/longhornio/longhorn-engine", State: "failed"},
+	}
+	text = Render(r, Options{Responder: true})
+	for _, want := range []string{
+		"（2 件）",
+		"• `yuanying/hshelf` completed <https://github.com/yuanying/fleet-infra/pull/240|PR>\n　json は上流待ちとして VEX を書いた",
+		"• `index.docker.io/longhornio/longhorn-engine` failed\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("rendered digest lacks %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestNextRun(t *testing.T) {
 	s := Schedule{Weekday: time.Monday, Hour: 9, Minute: 0, Location: tokyo}
 	tests := []struct{ after, want time.Time }{

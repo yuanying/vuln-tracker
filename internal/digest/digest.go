@@ -42,6 +42,15 @@ type Item struct {
 	FirstSeen  int64
 }
 
+// Request is a request to vuln-responder as the digest shows it (ADR 0009).
+type Request struct {
+	// Target is the source repository or the image.
+	Target  string
+	State   string
+	PR      string
+	Summary string
+}
+
 // Report is one digest.
 type Report struct {
 	New      []Item
@@ -52,6 +61,9 @@ type Report struct {
 	Gone map[string]int
 	// Counts is the number of findings in each stage.
 	Counts map[string]int
+	// Requests are the requests to vuln-responder that changed since the
+	// last digest. The caller fills them in.
+	Requests []Request
 
 	items []Item
 }
@@ -110,6 +122,8 @@ type Options struct {
 	VEXBaseURL string
 	// MaxItems is how many findings a section lists before summarizing.
 	MaxItems int
+	// Responder shows the section on requests to vuln-responder.
+	Responder bool
 }
 
 // Render writes the digest as Slack mrkdwn.
@@ -189,6 +203,23 @@ func Render(r Report, o Options) string {
 		}
 		return s
 	})
+
+	if o.Responder {
+		fmt.Fprintf(&b, "\n*vuln-responder への依頼*（%d 件）\n", len(r.Requests))
+		if len(r.Requests) == 0 {
+			b.WriteString("なし\n")
+		}
+		for _, q := range r.Requests {
+			fmt.Fprintf(&b, "• `%s` %s", q.Target, q.State)
+			if q.PR != "" {
+				fmt.Fprintf(&b, " <%s|PR>", q.PR)
+			}
+			b.WriteString("\n")
+			if q.Summary != "" {
+				b.WriteString("　" + oneLine(q.Summary) + "\n")
+			}
+		}
+	}
 
 	out := b.String()
 	if len(out) > maxText {

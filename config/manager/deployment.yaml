@@ -102,6 +102,9 @@ spec:
             - name: registry-auth
               mountPath: /etc/vuln-tracker/docker
               readOnly: true
+            - name: a2a-token
+              mountPath: /var/run/secrets/a2a
+              readOnly: true
       volumes:
         # trivy's temporary files and its Java DB (ADR 0003).
         - name: work
@@ -117,3 +120,13 @@ spec:
             items:
               - key: .dockerconfigjson
                 path: config.json
+        # The ServiceAccount's token for the a2a audience, sent to
+        # vuln-responder (ADR 0009). Read only when --responder-url is set;
+        # the kubelet replaces it before it expires.
+        - name: a2a-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: a2a
+                  expirationSeconds: 3600
+                  path: token

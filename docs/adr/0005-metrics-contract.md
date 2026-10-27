@@ -58,6 +58,7 @@ PrometheusRule で鳴らす。どちらも fleet-infra 側の作業単位が書�
 | `vuln_tracker_sync_timestamp_seconds` | gauge | `target`（`fleet-infra`・`k8s-manifests-fraction`・`registry`） | 最後に読めた時刻 |
 | `vuln_tracker_sync_errors_total` | counter | `target`（上に `vex` を加える） | 読めなかった回数。VEX は捨てた文書と statement の数 |
 | `vuln_tracker_digest_sent_timestamp_seconds` | gauge | | 最後に週次ダイジェストを送れた時刻 |
+| `vuln_tracker_responder_request_info` | gauge | `target`（ソースのリポジトリかイメージの名前）・`target_type`（`source`・`image`）・`state`・`pr`（PR の URL、無ければ空） | vuln-responder への依頼の状態が最後に変わった時刻（unix 秒）。target ごとに 1 系列（ADR 0009） |
 
 `vuln_tracker_finding` の `package` は VulnerabilityReport の `resource`（パッケージの名前）である。
 `vuln_tracker_finding` に `self_built` と `source` は持たせない。要るときは `image`・`digest` で
@@ -106,6 +107,7 @@ count by (image) (
 | 期限切れ | `vex_expired="true"` |
 | 対応先不明 | `vuln_tracker_image_info{source=""}` |
 | 候補の様子 | `vuln_tracker_candidate_info` |
+| vuln-responder への依頼 | `vuln_tracker_responder_request_info`。`state` で失敗（`failed`・`rejected`・`error`・`timeout`）を拾える |
 
 ## Consequences
 
@@ -126,3 +128,4 @@ count by (image) (
 - [[0002-remediation-stages]]
 - [[0004-applying-openvex-annotations]]
 - [[0006-weekly-digest-and-durable-state]]
+- [[0009-requesting-triage-from-vuln-responder]]
