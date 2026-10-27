@@ -1,0 +1,17 @@
+# /metrics for Prometheus. config/prometheus has a ServiceMonitor for
+# kube-prometheus.
+apiVersion: v1
+kind: Service
+metadata:
+  name: vuln-tracker
+  namespace: vuln-tracker
+  labels:
+    app.kubernetes.io/name: vuln-tracker
+spec:
+  selector:
+    app.kubernetes.io/name: vuln-tracker
+  ports:
+    - name: metrics
+      port: 8080
+      targetPort: metrics
+      protocol: TCP

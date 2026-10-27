@@ -112,6 +112,15 @@ func (t *Trivy) env() []string {
 
 // Scan runs one scan and parses its report.
 func (t *Trivy) Scan(ctx context.Context, ref string) (Set, error) {
+	// The work area is an emptyDir; the directories in it are made here.
+	for _, d := range []string{t.TempDir, t.CacheDir} {
+		if d == "" {
+			continue
+		}
+		if err := os.MkdirAll(d, 0o750); err != nil {
+			return nil, fmt.Errorf("preparing %s: %w", d, err)
+		}
+	}
 	defer t.cleanTemp()
 	if t.Timeout > 0 {
 		var cancel context.CancelFunc

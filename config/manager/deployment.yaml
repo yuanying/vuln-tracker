@@ -1,0 +1,119 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vuln-tracker
+  namespace: vuln-tracker
+  labels:
+    app.kubernetes.io/name: vuln-tracker
+spec:
+  # One replica, and never two at once: it alone writes the state ConfigMap,
+  # sends the digest and scans through the shared Trivy server (ADR 0001).
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vuln-tracker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vuln-tracker
+    spec:
+      serviceAccountName: vuln-tracker
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: vuln-tracker
+          image: ghcr.io/yuanying/vuln-tracker:main
+          args:
+            # The rest are defaults that fit the fraction cluster; see
+            # README.md. An overlay adds --dashboard-url.
+            - --trivy-server=http://trivy-service.trivy-system:4954
+            - --trivy-cache-dir=/work/cache
+            - --trivy-temp-dir=/work/tmp
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            # trivy and the registry client find credentials here
+            # (config.json from the optional registry Secret).
+            - name: DOCKER_CONFIG
+              value: /etc/vuln-tracker/docker
+            - name: HOME
+              value: /work/home
+            # All three are optional: without a token fleet-infra cannot be
+            # read, without a webhook no digest is sent (ADR 0007).
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: vuln-tracker-github
+                  key: token
+                  optional: true
+            - name: SLACK_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: vuln-tracker-slack
+                  key: webhook-url
+                  optional: true
+            - name: TRIVY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: vuln-tracker-trivy
+                  key: token
+                  optional: true
+          ports:
+            - name: metrics
+              containerPort: 8080
+              protocol: TCP
+            - name: probes
+              containerPort: 8081
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: probes
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: probes
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            # A scan analyses an image's layers in this container; the same
+            # ceiling as Trivy Operator's scan jobs.
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: work
+              mountPath: /work
+            - name: registry-auth
+              mountPath: /etc/vuln-tracker/docker
+              readOnly: true
+      volumes:
+        # trivy's temporary files and its Java DB (ADR 0003).
+        - name: work
+          emptyDir:
+            sizeLimit: 2Gi
+        # Pull-only credentials for private registries, in the shape of a
+        # kubernetes.io/dockerconfigjson Secret. Optional: without it every
+        # registry is read anonymously.
+        - name: registry-auth
+          secret:
+            secretName: vuln-tracker-registry
+            optional: true
+            items:
+              - key: .dockerconfigjson
+                path: config.json

@@ -1,0 +1,19 @@
+# The state ConfigMap (ADR 0006), in the tracker's own namespace. Creating
+# cannot be limited to a name, so it is a rule of its own; reading and writing
+# are limited to the one ConfigMap. The tracker reads no Secret through the API:
+# they reach it as environment variables and files.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: vuln-tracker
+  namespace: vuln-tracker
+  labels:
+    app.kubernetes.io/name: vuln-tracker
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["vuln-tracker-state"]
+    verbs: ["get", "update", "patch"]
