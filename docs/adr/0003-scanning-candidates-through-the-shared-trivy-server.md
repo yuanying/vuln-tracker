@@ -1,7 +1,7 @@
 # 0003. 候補の版は、共有の Trivy server にクライアントとして繋いでスキャンする
 
 - Date: 2026-10-27
-- Status: Proposed
+- Status: Accepted
 
 ## Context
 

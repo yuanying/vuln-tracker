@@ -1,7 +1,7 @@
 # 0007. 資格はすべて読み取りだけにする
 
 - Date: 2026-10-27
-- Status: Proposed
+- Status: Accepted
 
 ## Context
 
@@ -25,6 +25,8 @@ ghcr・Docker Hub・quay.io・registry.k8s.io・registry.fraction.jp などの�
 | Trivy server | トークン（任意、環境変数） | — | 今の Trivy server はトークンを要しない |
 | Slack | Incoming Webhook の URL（環境変数） | その 1 チャンネルへの投稿だけ | ダイジェストを送らない |
 
+- GitHub のトークンは環境変数 `GITHUB_TOKEN` 1 つで受け取り、Bearer として送る。fine-grained PAT を想定する。
+  GitHub App の installation token も同じ形で使えるが、1 時間で切れるので、入れ替える仕組みが無いうちは PAT を使う
 - git は clone しない。GitHub の API で既定ブランチの HEAD を確かめ、変わったときだけ tarball を取る。
   集計役のイメージに git を入れずに済み、資格の使い道も API の読み取りに限られる
 - trivy にもレジストリの資格を同じファイルで渡す（`DOCKER_CONFIG`）

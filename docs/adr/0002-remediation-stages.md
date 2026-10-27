@@ -1,7 +1,7 @@
 # 0002. 対応の段階を、候補の版のスキャンと git から決める
 
 - Date: 2026-10-27
-- Status: Proposed
+- Status: Accepted
 
 ## Context
 

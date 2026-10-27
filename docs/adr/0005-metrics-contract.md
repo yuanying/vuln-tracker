@@ -1,7 +1,7 @@
 # 0005. メトリクスの契約: 発見ごとの系列と、段階ごとの件数
 
 - Date: 2026-10-27
-- Status: Proposed
+- Status: Accepted
 
 ## Context
 
@@ -85,6 +85,16 @@ PrometheusRule で鳴らす。どちらも fleet-infra 側の作業単位が書�
   （`fixed-upstream` は「上流は直したが fleet-infra は未着手」なので、対応なしに数える）
 - かつ `time() - vuln_tracker_finding < 7 * 86400`
 - `image` ごとに `count` でまとめる
+
+PrometheusRule は fleet-infra 側で書く。式の例（7 日の窓）を契約の確認のために残す。
+
+```promql
+count by (image) (
+  (time() - vuln_tracker_finding{severity="CRITICAL", fixable="true", vex_state="none",
+                                 stage=~"unfixed|fixed-upstream|unscannable|pending"})
+  < 7 * 86400
+)
+```
 
 ### ダッシュボード
 

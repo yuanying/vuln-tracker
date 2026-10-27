@@ -1,7 +1,7 @@
 # 0004. OpenVEX の注釈を、Trivy と同じ規則で発見に重ねる
 
 - Date: 2026-10-27
-- Status: Proposed
+- Status: Accepted
 
 ## Context
 

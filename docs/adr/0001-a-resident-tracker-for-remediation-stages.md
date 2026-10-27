@@ -1,7 +1,7 @@
 # 0001. 対応の段階を集計する常駐の集計役を作る
 
 - Date: 2026-10-27
-- Status: Proposed
+- Status: Accepted
 
 ## Context
 

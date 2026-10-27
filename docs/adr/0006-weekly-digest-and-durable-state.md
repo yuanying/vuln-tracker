@@ -1,7 +1,7 @@
 # 0006. 週次ダイジェストを Slack に送り、差分のための状態を ConfigMap に置く
 
 - Date: 2026-10-27
-- Status: Proposed
+- Status: Accepted
 
 ## Context
 
