@@ -9,8 +9,9 @@
 - 候補のスキャンの結果から、発見ごとに **段階** を決める
 - fleet-infra の `security/vex/` の OpenVEX の注釈を、Trivy と同じ規則で当てる
 - 段階と注釈を Prometheus のメトリクスとして出し、週次のダイジェストを Slack に送る
+- 有効にすれば、注釈も対応もない新しい修正版ありの Critical を、fraction-agents の vuln-responder に A2A で依頼する
 
-読むだけで、書くのは自分の状態の ConfigMap 1 つと Slack だけである。設計の判断は [docs/adr/](docs/adr/) にある。
+読むだけで、書くのは自分の状態の ConfigMap 1 つと Slack、それに有効にしたときの vuln-responder への依頼だけである。設計の判断は [docs/adr/](docs/adr/) にある。
 
 ## 段階
 
@@ -47,6 +48,7 @@
 | `vuln_tracker_sync_timestamp_seconds` | `target`（`fleet-infra` `k8s-manifests-fraction` `registry`） | 最後に読めた時刻 |
 | `vuln_tracker_sync_errors_total` | `target`（上に `vex` を加える） | 読めなかった回数 |
 | `vuln_tracker_digest_sent_timestamp_seconds` | | 最後にダイジェストを送れた時刻 |
+| `vuln_tracker_responder_request_info` | `target` `target_type` `state` `pr` | vuln-responder への依頼の状態が最後に変わった時刻。target ごとに 1 系列 |
 
 | ラベル | 値 |
 |---|---|
@@ -56,6 +58,8 @@
 | `vex_expired` | 注釈の `review-by` が今日（`--timezone`）より前なら `true` |
 | `candidate` | `main` `release` `upstream` `git` |
 | `result` | `scanned` `failed` `pending` |
+| `target_type` | `source`（自作イメージのソースのリポジトリ）`image`（外のイメージ） |
+| `state`（依頼） | A2A の Task の状態（`submitted` `working` `completed` `failed` `rejected` `canceled` など）か、集計役の `error`（送れなかった）`timeout`（待つのをやめた） |
 
 即時のアラート「注釈も対応もない、新しい、修正版のある Critical」の式の例は ADR 0005 にある。理由の文はメトリクスに出さない。ダッシュボードでは `image` から fleet-infra の VEX のファイルへリンクする。
 
@@ -86,6 +90,12 @@
 | `--metrics-bind-address` | `:8080` | /metrics |
 | `--health-probe-bind-address` | `:8081` | /healthz・/readyz |
 | `--leader-elect` | `false` | リーダー選出。レプリカ 1 では使わない |
+| `--responder-url` | （なし） | vuln-responder の A2A の URL。空なら依頼しない |
+| `--responder-token-file` | `/var/run/secrets/a2a/token` | audience `a2a` の projected token。送るたびに読み直す |
+| `--responder-mode` | `vex-only` | 依頼の `mode`（`vex-only`・`fix`） |
+| `--responder-new-within` | `168h` | 依頼する「新しい」の窓 |
+| `--responder-task-timeout` | `3h` | Task を待つ上限 |
+| `--responder-poll-interval` | `1m` | 依頼を送るか Task を見に行く間隔 |
 
 ### 要る Secret
 
@@ -110,6 +120,22 @@
 
 読めない形のファイルは使わず、前に読めた表を使い続ける（`vuln_tracker_sync_errors_total{target="vex"}` が増える）。
 
+## vuln-responder への依頼
+
+`--responder-url` を与えると、即時のアラートと同じ「注釈も対応もない、新しい、修正版のある Critical」を、target ごとに vuln-responder へ A2A 1.0 で依頼する。詳細は [ADR 0009](docs/adr/0009-requesting-triage-from-vuln-responder.md)。
+
+| 項目 | 振る舞い |
+|---|---|
+| target | 自作イメージはソースのリポジトリ（例 `yuanying/hshelf`）、それ以外はイメージ（例 `index.docker.io/longhornio/longhorn-engine`） |
+| メッセージ | 人が読む text の part と、`kind` が `vuln-triage/v1` の data の part |
+| context | vuln-responder が採番した contextId を target ごとに覚え、次の依頼を同じ context に続ける。知らないと言われたら新しい context で送り直す |
+| 重複 | target ごとに頼んだ発見（イメージ・脆弱性・パッケージ）を状態の ConfigMap に覚え、頼んでいない発見が増えたときだけ頼む |
+| 同時に | 1 件まで。Task が終わるまで次を送らない |
+| 失敗 | 10 分から倍にして待ち、5 回目の失敗であきらめる |
+| 返事 | Task の状態と、返事にある PR の URL をメトリクスとダイジェストに出す |
+
+有効にするには、Deployment に `--responder-url` を足し、vuln-responder の受け付ける呼び出し元に `system:serviceaccount:vuln-tracker:vuln-tracker` を足す。token の volume は `config/` に入っている。
+
 ## デプロイ
 
 `config/` に kustomize のマニフェストがある。
@@ -120,7 +146,7 @@
 | ServiceAccount | `vuln-tracker` | |
 | ClusterRole / ClusterRoleBinding | `vuln-tracker` | VulnerabilityReport と Pod の get・list・watch |
 | Role / RoleBinding | `vuln-tracker` | ConfigMap の create と、`vuln-tracker-state` の get・update・patch |
-| Deployment | `vuln-tracker` | レプリカ 1、`Recreate`。作業領域は emptyDir（`sizeLimit: 2Gi`） |
+| Deployment | `vuln-tracker` | レプリカ 1、`Recreate`。作業領域は emptyDir（`sizeLimit: 2Gi`）。audience `a2a` の projected token を `/var/run/secrets/a2a/token` に置く |
 | Service | `vuln-tracker` | /metrics（ポート名 `metrics`） |
 
 `config/prometheus/servicemonitor.yaml` は kube-prometheus 向けの ServiceMonitor の例で、既定の kustomization には含めない。状態の ConfigMap は集計役が作るので、マニフェストには含めない。
