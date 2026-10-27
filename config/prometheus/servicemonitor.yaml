@@ -1,0 +1,17 @@
+# For kube-prometheus. Not part of the default kustomization: the label the
+# Prometheus selects on belongs to the cluster, so an overlay adds this.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: vuln-tracker
+  namespace: vuln-tracker
+  labels:
+    app.kubernetes.io/name: vuln-tracker
+    release: kube-prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vuln-tracker
+  endpoints:
+    - port: metrics
+      interval: 60s

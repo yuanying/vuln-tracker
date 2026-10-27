@@ -1,0 +1,29 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://example.com/security/vex/ghcr.io/yuanying/hshelf",
+  "author": "test",
+  "timestamp": "2026-10-27T03:45:00Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": {
+        "name": "CVE-2026-33210"
+      },
+      "timestamp": "2026-10-27T03:45:00Z",
+      "products": [
+        {
+          "@id": "pkg:oci/hshelf?repository_url=ghcr.io/yuanying/hshelf",
+          "subcomponents": [
+            {
+              "@id": "pkg:gem/json@2.18.0"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "json 2.18.0 is the copy bundled with the base image and is never loaded.",
+      "status_notes": "state: upstream\nreview-by: 2026-12-31"
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Same policy as gated: a version is proposed only once it has been public for seven days. Patch, digest and pin updates merge themselves once CI passes; the rest only open a pull request",
+  "extends": [
+    "config:recommended",
+    ":semanticCommitTypeAll(chore)"
+  ],
+  "timezone": "Asia/Tokyo",
+  "dependencyDashboard": true,
+  "minimumReleaseAge": "7 days",
+  "internalChecksFilter": "strict",
+  "platformAutomerge": false,
+  "postUpdateOptions": ["gomodTidy"],
+  "kubernetes": {
+    "managerFilePatterns": ["config/**/*.yaml"]
+  },
+  "packageRules": [
+    {
+      "description": "Kubernetes libraries and controller-runtime move as one release train",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": [
+        "k8s.io/api",
+        "k8s.io/apimachinery",
+        "k8s.io/client-go",
+        "sigs.k8s.io/controller-runtime",
+        "sigs.k8s.io/controller-runtime/**"
+      ],
+      "groupName": "kubernetes monorepo"
+    },
+    {
+      "description": "The trivy binary in the image has to stay on the minor of the Trivy server it talks to (ADR 0003), which trivy-operator in fleet-infra decides. A new minor only opens a pull request, to be merged together with the server's upgrade",
+      "matchManagers": ["dockerfile"],
+      "matchPackageNames": ["mirror.gcr.io/aquasec/trivy"],
+      "matchUpdateTypes": ["minor", "major"],
+      "automerge": false,
+      "labels": ["trivy-server-version"]
+    },
+    {
+      "description": "The image in config/ names the branch, not a version; fleet-infra pins the version",
+      "matchManagers": ["kubernetes"],
+      "matchPackageNames": ["ghcr.io/yuanying/vuln-tracker"],
+      "enabled": false
+    },
+    {
+      "matchUpdateTypes": ["patch", "digest", "pin", "pinDigest"],
+      "automerge": true
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "github-actions"
+    }
+  ]
+}

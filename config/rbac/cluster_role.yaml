@@ -1,0 +1,16 @@
+# What the tracker reads across the cluster, and nothing it could write
+# (ADR 0007). Pods are read only for which digests run (ADR 0002); the cache
+# keeps nothing else of them.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vuln-tracker
+  labels:
+    app.kubernetes.io/name: vuln-tracker
+rules:
+  - apiGroups: ["aquasecurity.github.io"]
+    resources: ["vulnerabilityreports"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]

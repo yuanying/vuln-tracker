@@ -1,0 +1,100 @@
+# vuln-tracker CI
+#
+# Every job calls the Makefile target that already exists for it, so nothing
+# here can be run in CI but not on a laptop. The image is built on every pull
+# request so a broken Dockerfile shows before it reaches main; it is pushed
+# only by publish.yml.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Deciding whether a pull request is good writes nothing.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  vet:
+    name: vet
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make vet
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    # golangci-lint is built from source on a cold runner.
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make lint
+
+  # The unit tests and the envtest layer, which downloads its control plane
+  # binaries as part of the target.
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make test
+
+  tidy:
+    name: go.mod is tidy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make tidy
+      - name: go.mod and go.sum are unchanged
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --short
+            git diff
+            echo "::error::tidying changed the working tree. Run \`make tidy\` and commit the result."
+            exit 1
+          fi
+
+  # config/ is what fleet-infra takes in; it has to build.
+  manifests:
+    name: manifests build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: make manifests-check
+
+  image:
+    name: image builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: false
+          provenance: false
