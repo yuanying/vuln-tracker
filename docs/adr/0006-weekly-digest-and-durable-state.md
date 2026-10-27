@@ -32,6 +32,7 @@
 | 段階が進んだもの | 前回と比べて段階が先に進んだ発見（前の段階 → 今の段階） |
 | 本番で直ったもの | 前回はあったが、今は無い発見の件数（イメージごと） |
 | 注釈の期限切れ | 見直す期限を過ぎた注釈（イメージ・脆弱性・state・期限・理由の文） |
+| vuln-responder への依頼 | 前回のダイジェストの後に状態が変わった依頼（target・状態・PR のリンク・返事の要約）。依頼の機能が off なら出さない（ADR 0009） |
 
 - どの節も、ダッシュボードへのリンクを付ける（URL は設定で与える）。注釈には fleet-infra の
   VEX のファイルへのリンクを付ける
@@ -49,6 +50,7 @@
 | 初めて見た時刻 | `image` × `vulnerability_id` → 初めて見た時刻、最後に見た時刻（ADR 0005） |
 | 前回のダイジェストの断面 | 対象の重大度の発見ごとの段階と注釈の state |
 | 前回送った時刻 | |
+| vuln-responder への依頼 | target ごとの依頼の記録（ADR 0009） |
 
 - 中身は JSON を gzip で縮めて `binaryData` に入れる。2026-10-27 の本番の量（組 3,908）で、
   縮める前で数百 KB、縮めた後で数十 KB の見込みであり、ConfigMap の上限（1MiB）に余裕がある
@@ -74,3 +76,4 @@ PersistentVolume にしなかったのは、量が小さく、Longhorn のボリ
 - [[0004-applying-openvex-annotations]]
 - [[0005-metrics-contract]]
 - [[0007-read-only-credentials]]
+- [[0009-requesting-triage-from-vuln-responder]]

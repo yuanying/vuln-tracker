@@ -24,6 +24,7 @@ ghcr・Docker Hub・quay.io・registry.k8s.io・registry.fraction.jp などの�
 | レジストリ | docker の config.json の形の Secret（`kubernetes.io/dockerconfigjson`）をファイルで渡す | pull だけ（ghcr は `read:packages`、registry.fraction.jp は pull だけのアカウント、Docker Hub は rate limit を上げるためだけ） | 匿名で読む。registry.fraction.jp の発見は `unscannable` になる |
 | Trivy server | トークン（任意、環境変数） | — | 今の Trivy server はトークンを要しない |
 | Slack | Incoming Webhook の URL（環境変数） | その 1 チャンネルへの投稿だけ | ダイジェストを送らない |
+| vuln-responder（A2A） | 集計役の ServiceAccount の projected token（audience `a2a`、ファイル） | vuln-responder への依頼だけ。apiserver は audience `a2a` の token を受け付けない（fraction-agents ADR 0003） | 依頼しない（ADR 0009） |
 
 - GitHub のトークンは環境変数 `GITHUB_TOKEN` 1 つで受け取り、Bearer として送る。fine-grained PAT を想定する。
   GitHub App の installation token も同じ形で使えるが、1 時間で切れるので、入れ替える仕組みが無いうちは PAT を使う
@@ -43,9 +44,16 @@ ghcr・Docker Hub・quay.io・registry.k8s.io・registry.fraction.jp などの�
 Secret は Pod に環境変数とファイルで渡し、API で読む権限は持たせない。Lease の権限は、
 リーダー選出を有効にしたとき（既定では無効。ADR 0001）だけ足す。
 
+### 追記（2026-10-27、ADR 0009）
+
+vuln-responder への依頼（ADR 0009）で、書く先に「vuln-responder への A2A の依頼」が加わった。
+集計役の資格は依頼を送れるだけで、リポジトリに書く権限は持たない。PR を出すのは vuln-responder であり、
+書ける範囲は vuln-responder の側の設定で絞る。projected token は Kubernetes の RBAC を要さないので、
+上の Kubernetes の権限の表は変わらない。
+
 ## Consequences
 
-- 集計役が乗っ取られても、書けるのは Slack の 1 チャンネルと自分の ConfigMap だけである
+- 集計役が乗っ取られても、書けるのは Slack の 1 チャンネルと自分の ConfigMap と、vuln-responder への依頼だけである
 - fleet-infra を読むトークンは、ユーザーが作る（fine-grained PAT か GitHub App）。作り方と置き方は
   fleet-infra 側の作業単位の README に書く
 - Pod を cluster 全体で watch するので、Pod の数だけメモリを使う。キャッシュには、動いている
@@ -56,3 +64,4 @@ Secret は Pod に環境変数とファイルで渡し、API で読む権限は�
 - [[0001-a-resident-tracker-for-remediation-stages]]
 - [[0002-remediation-stages]]
 - [[0006-weekly-digest-and-durable-state]]
+- [[0009-requesting-triage-from-vuln-responder]]
