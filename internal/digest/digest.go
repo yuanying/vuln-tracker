@@ -108,7 +108,7 @@ type Options struct {
 	// fleet-infra (ADR 0004), e.g.
 	// "https://github.com/yuanying/fleet-infra/blob/main/".
 	VEXBaseURL string
-	// MaxItems is how many findings a section lists before summarising.
+	// MaxItems is how many findings a section lists before summarizing.
 	MaxItems int
 }
 

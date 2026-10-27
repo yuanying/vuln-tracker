@@ -1,0 +1,93 @@
+# golangci-lint configuration for vuln-tracker.
+#
+# The same set as gated, named one by one rather than taken from a preset, so
+# that turning one on is a decision somebody made and turning one off leaves a
+# reason behind. The tracker reads untrusted input (registry labels, tag lists,
+# VEX documents, other people's manifests), holds read-only credentials and
+# talks to several HTTP APIs; what earns a linter its place is finding what a
+# test cannot — an ignored error, a leaked response body, a request that does
+# not stop on shutdown.
+#
+# Every exclusion below carries the reason it is there.
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+    # A response body that is never closed leaks a connection. The tracker
+    # polls GitHub, registries and Slack for as long as it runs.
+    - bodyclose
+    # Comparing errors with == breaks the moment something wraps them, and
+    # registry.ErrNotFound always arrives wrapped.
+    - errorlint
+    # Returning nil after finding a non-nil error, which reads as success.
+    - nilerr
+    # An outbound request built without a context ignores cancellation, so a
+    # shutdown waits on an API that may never answer.
+    - noctx
+    - usestdlibvars
+    - copyloopvar
+    - durationcheck
+    - makezero
+    - wastedassign
+    - unconvert
+    - forcetypeassert
+    - misspell
+    # The process holds a GitHub token and a webhook URL.
+    - gosec
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+    govet:
+      enable-all: true
+      disable:
+        # Struct field alignment is a memory-layout micro-optimisation, and
+        # ordering fields by size would scatter the ones that belong together.
+        - fieldalignment
+        # `if err := f(); err != nil` inside a function that already has an
+        # err is the ordinary shape of Go.
+        - shadow
+    gosec:
+      excludes:
+        # G104: an unhandled error. errcheck already reports these.
+        - G104
+    misspell:
+      # US, unlike gated: the words that come from the APIs read here —
+      # Trivy's "artifact", Kubernetes' "Initialized" — are American, and
+      # spelling field names differently from the JSON they map to helps
+      # nobody.
+      locale: US
+    staticcheck:
+      checks:
+        - all
+        # QF1001 rewrites a negated condition through De Morgan's law. Which
+        # of the two forms reads better depends on what the condition means.
+        - -QF1001
+
+  exclusions:
+    generated: lax
+    presets:
+      # Deferred Close on a response body or a gzip reader has nowhere to
+      # report to.
+      - std-error-handling
+    rules:
+      # Tests build fixtures and assert on them. An unchecked error in a
+      # helper fails the test on the next line.
+      - path: _test\.go
+        linters:
+          - bodyclose
+          - errcheck
+          - forcetypeassert
+          - gosec
+          - noctx
+
+formatters:
+  enable:
+    - gofmt

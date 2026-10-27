@@ -27,7 +27,7 @@ func fixtures(t *testing.T) map[string][]byte {
 		hshelfPath:   read("hshelf.openvex.json"),
 		longhornPath: read("longhorn-engine.openvex.json"),
 		// Not a VEX file: ignored, not an error.
-		"security/vex/README.md": []byte("# security/vex"),
+		"security/vex/README.md":    []byte("# security/vex"),
 		"apps/x/kustomization.yaml": []byte("images: []"),
 	}
 }

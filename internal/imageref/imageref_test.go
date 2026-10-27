@@ -61,11 +61,11 @@ func TestNameAndString(t *testing.T) {
 // follows the last colon is the tag.
 func TestReportTag(t *testing.T) {
 	tests := map[string]string{
-		"1.0.0":                     "1.0.0",
-		"httpd:2.4.69-alpine":       "2.4.69-alpine",
-		"nginx:1.30.6-alpine":       "1.30.6-alpine",
+		"1.0.0":                                "1.0.0",
+		"httpd:2.4.69-alpine":                  "2.4.69-alpine",
+		"nginx:1.30.6-alpine":                  "1.30.6-alpine",
 		"searxng/searxng:2026.10.25-54ca1d9cf": "2026.10.25-54ca1d9cf",
-		"":                          "",
+		"":                                     "",
 	}
 	for in, want := range tests {
 		if got := ReportTag(in); got != want {

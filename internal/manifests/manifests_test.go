@@ -3,8 +3,6 @@ package manifests
 import (
 	"slices"
 	"testing"
-
-	"github.com/yuanying/vuln-tracker/internal/imageref"
 )
 
 const digestA = "sha256:28bed156fd3edf8f3899f4e669608e0faa16d25c51904bd04ce40ec4c4e06b5e"
@@ -109,5 +107,8 @@ func TestMerge(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("got %v, want %v", got, want)
 	}
-	var _ []imageref.Ref = Merge(a, b).Versions("x")
+	refs := Merge(a, b).Versions("x")
+	if len(refs) != 0 {
+		t.Errorf("an image no manifest names has versions: %v", refs)
+	}
 }
