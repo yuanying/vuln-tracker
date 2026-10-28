@@ -1,7 +1,7 @@
 # 0009. vuln-responder に A2A で脆弱性の対応を依頼する
 
 - Date: 2026-10-27
-- Status: Accepted
+- Status: Accepted（いつ・何を頼むかと、重複を避ける記録の鍵を ADR 0011 で広げた）
 
 ## Context
 
@@ -147,3 +147,4 @@
 - [[0005-metrics-contract]]
 - [[0006-weekly-digest-and-durable-state]]
 - [[0007-read-only-credentials]]
+- [[0011-requesting-version-bumps-when-a-stage-advances]]
