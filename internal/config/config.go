@@ -95,7 +95,7 @@ func Parse(args []string, getenv func(string) string, extra ...func(*flag.FlagSe
 	fs.StringVar(&c.VEXBaseURL, "vex-base-url", "https://github.com/yuanying/fleet-infra/blob/main/", "Prefix that turns a VEX document's path into a link.")
 	fs.StringVar(&c.ResponderURL, "responder-url", "", "A2A endpoint of vuln-responder. Empty: nothing is asked of it.")
 	fs.StringVar(&c.ResponderTokenFile, "responder-token-file", "/var/run/secrets/a2a/token", "ServiceAccount token for the a2a audience, read for every request.")
-	fs.StringVar(&c.ResponderMode, "responder-mode", "vex-only", "What vuln-responder is asked for: vex-only or fix.")
+	fs.StringVar(&c.ResponderMode, "responder-mode", "vex-only", "What vuln-responder is asked for: vex-only, or fix, which also asks for version bumps.")
 	fs.DurationVar(&c.ResponderNewWithin, "responder-new-within", 7*24*time.Hour, "Findings first seen this recently are asked about.")
 	fs.DurationVar(&c.ResponderTaskTimeout, "responder-task-timeout", 3*time.Hour, "How long a vuln-responder task is waited for.")
 	fs.DurationVar(&c.ResponderPollInterval, "responder-poll-interval", time.Minute, "How often a request is sent or its task looked at.")

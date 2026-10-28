@@ -81,9 +81,15 @@ func (f *fakeA2A) lastData(t *testing.T) Payload {
 func finding(image, id, pkg, digest string) Finding {
 	return Finding{
 		VulnerabilityID: id, Severity: "CRITICAL", Package: pkg, InstalledVersion: "1.0", FixedVersion: "1.1",
-		Stage: "unfixed", VexState: "none", Image: image, Tag: "v1", Digest: digest,
+		Stage: "unfixed", VexState: "none", Image: image, Tag: "v1", Digest: digest, Trigger: TriggerTriage,
 		Workloads: []Workload{{Namespace: "ns", Kind: "ReplicaSet", Name: "app-1", Container: "app"}},
 	}
+}
+
+// bumped is a finding whose stage reached a fixed version (ADR 0011).
+func bumped(f Finding, st, tag, digest string, renovate ...string) Finding {
+	f.Trigger, f.Stage, f.FixedInTag, f.FixedInDigest, f.RenovatePRs = TriggerBump, st, tag, digest, renovate
+	return f
 }
 
 const hshelfImage = "ghcr.io/yuanying/hshelf"
@@ -361,8 +367,8 @@ func TestPayloadShape(t *testing.T) {
 	want := `{"kind":"vuln-triage/v1","mode":"vex-only",` +
 		`"target":{"type":"source","repository":"yuanying/hshelf","image":null},` +
 		`"findings":[` +
-		`{"vulnerabilityID":"CVE-1","severity":"CRITICAL","package":"json","installedVersion":"1.0","fixedVersion":"1.1","stage":"unfixed","vexState":"none","image":"ghcr.io/yuanying/hshelf","tag":"v1","digest":"sha256:aa","workloads":[{"namespace":"ns","kind":"ReplicaSet","name":"app-1","container":"app"}]},` +
-		`{"vulnerabilityID":"CVE-2","severity":"CRITICAL","package":"json","installedVersion":"1.0","fixedVersion":"1.1","stage":"unfixed","vexState":"none","image":"ghcr.io/yuanying/tumblr-like","tag":"v1","digest":"sha256:bb","workloads":[{"namespace":"ns","kind":"ReplicaSet","name":"app-1","container":"app"}]}` +
+		`{"vulnerabilityID":"CVE-1","severity":"CRITICAL","package":"json","installedVersion":"1.0","fixedVersion":"1.1","stage":"unfixed","vexState":"none","image":"ghcr.io/yuanying/hshelf","tag":"v1","digest":"sha256:aa","trigger":"triage","workloads":[{"namespace":"ns","kind":"ReplicaSet","name":"app-1","container":"app"}]},` +
+		`{"vulnerabilityID":"CVE-2","severity":"CRITICAL","package":"json","installedVersion":"1.0","fixedVersion":"1.1","stage":"unfixed","vexState":"none","image":"ghcr.io/yuanying/tumblr-like","tag":"v1","digest":"sha256:bb","trigger":"triage","workloads":[{"namespace":"ns","kind":"ReplicaSet","name":"app-1","container":"app"}]}` +
 		`],"dashboard":"https://grafana.example/d/vuln","vexFile":"security/vex/ghcr.io/yuanying/hshelf.openvex.json"}`
 	if string(b) != want {
 		t.Errorf("payload:\n got %s\nwant %s", b, want)
@@ -380,6 +386,104 @@ func TestPayloadShape(t *testing.T) {
 		if !strings.Contains(string(b), s) {
 			t.Errorf("payload lacks %s: %s", s, b)
 		}
+	}
+}
+
+func TestFindingKey(t *testing.T) {
+	f := finding(hshelfImage, "CVE-1", "json", "sha256:aa")
+	tests := []struct {
+		f    Finding
+		want string
+	}{
+		{f, hshelfImage + "|CVE-1|json"},
+		{bumped(f, "fixed-in-release", "v1.0.1", "sha256:bb"), hshelfImage + "|CVE-1|json|fixed-in-release"},
+		{bumped(f, "fixed-upstream", "v1.0.1", "sha256:bb"), hshelfImage + "|CVE-1|json|fixed-upstream"},
+	}
+	for _, tc := range tests {
+		if got := tc.f.Key(); got != tc.want {
+			t.Errorf("Key(%s %s) = %q, want %q", tc.f.Trigger, tc.f.Stage, got, tc.want)
+		}
+	}
+}
+
+// A finding asked about as new is asked about once more when its stage
+// reaches a fixed version, and only once (ADR 0011).
+func TestStepBumpAfterTriage(t *testing.T) {
+	ctx := context.Background()
+	f := newFake()
+	r := newRequester(f)
+	recs := map[string]state.Request{}
+	const key = "source:yuanying/hshelf"
+	cve1 := finding(hshelfImage, "CVE-1", "json", "sha256:aa")
+
+	r.Step(ctx, t0, []Wanted{hshelfWanted(cve1)}, recs)
+	f.finish("task-1", "completed", "直す PR を出した: https://github.com/yuanying/hshelf/pull/12")
+	r.Step(ctx, t0.Add(time.Minute), nil, recs)
+
+	released := []Wanted{hshelfWanted(bumped(cve1, "fixed-in-release", "v1.0.1", "sha256:bb"))}
+	r.Step(ctx, t0.Add(2*time.Minute), released, recs)
+	if len(f.sent) != 2 {
+		t.Fatalf("the release was not asked about: sent %d", len(f.sent))
+	}
+	if f.sent[1].ContextID != "ctx-1" {
+		t.Errorf("contextId = %q, want the target's own", f.sent[1].ContextID)
+	}
+	if p := f.lastData(t); p.Findings[0].Trigger != TriggerBump || p.Findings[0].FixedInTag != "v1.0.1" {
+		t.Errorf("findings = %+v", p.Findings)
+	}
+	f.finish("task-2", "completed", "版上げの PR: https://github.com/yuanying/fleet-infra/pull/250")
+	r.Step(ctx, t0.Add(3*time.Minute), released, recs)
+	rec := recs[key]
+	if rec.PR != "https://github.com/yuanying/fleet-infra/pull/250" ||
+		!slices.Equal(rec.Asked, []string{hshelfImage + "|CVE-1|json", hshelfImage + "|CVE-1|json|fixed-in-release"}) {
+		t.Errorf("record = %+v", rec)
+	}
+
+	// A newer release of the same finding is not asked about again.
+	newer := []Wanted{hshelfWanted(bumped(cve1, "fixed-in-release", "v1.0.2", "sha256:cc"))}
+	for i := range 3 {
+		r.Step(ctx, t0.Add(time.Duration(4+i)*time.Minute), newer, recs)
+	}
+	if len(f.sent) != 2 {
+		t.Errorf("asked again for the same stage: sent %d", len(f.sent))
+	}
+}
+
+func TestBuildBump(t *testing.T) {
+	longhorn := "index.docker.io/longhornio/longhorn-engine"
+	old := finding(longhorn, "CVE-9", "openssl", "sha256:ff")
+	old.VexState = "upstream"
+	w := longhornWanted(
+		bumped(old, "fixed-upstream", "v1.13.1", "sha256:11", "https://github.com/yuanying/fleet-infra/pull/245"),
+		finding(longhorn, "CVE-10", "zlib", "sha256:ff"),
+	)
+	text, data := Build(w, "fix", "")
+	b, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{
+		`"trigger":"bump","fixedInTag":"v1.13.1","fixedInDigest":"sha256:11","renovatePRs":["https://github.com/yuanying/fleet-infra/pull/245"]`,
+		`"vulnerabilityID":"CVE-10","severity":"CRITICAL","package":"zlib","installedVersion":"1.0","fixedVersion":"1.1","stage":"unfixed","vexState":"none","image":"index.docker.io/longhornio/longhorn-engine","tag":"v1","digest":"sha256:ff","trigger":"triage","workloads"`,
+	} {
+		if !strings.Contains(string(b), s) {
+			t.Errorf("payload lacks %s:\n%s", s, b)
+		}
+	}
+	for _, s := range []string{
+		"直った版", "版を、その版に上げる PR", "v1.13.1", "sha256:11", "段階 fixed-upstream", "注釈 upstream",
+		"https://github.com/yuanying/fleet-infra/pull/245", "それで足りるなら新しい PR は出さず",
+		"新しく見つかった", "CVE-10",
+	} {
+		if !strings.Contains(text, s) {
+			t.Errorf("text lacks %q:\n%s", s, text)
+		}
+	}
+
+	// Only bumps: no section about new findings.
+	text, _ = Build(longhornWanted(bumped(old, "fixed-upstream", "v1.13.1", "sha256:11")), "fix", "")
+	if strings.Contains(text, "新しく見つかった") || strings.Contains(text, "Renovate") {
+		t.Errorf("text of a bump alone:\n%s", text)
 	}
 }
 

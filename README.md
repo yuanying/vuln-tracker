@@ -9,7 +9,7 @@
 - 候補のスキャンの結果から、発見ごとに **段階** を決める
 - fleet-infra の `security/vex/` の OpenVEX の注釈を、Trivy と同じ規則で当てる
 - 段階と注釈を Prometheus のメトリクスとして出し、週次のダイジェストを Slack に送る
-- 有効にすれば、注釈も対応もない新しい修正版ありの Critical を、fraction-agents の vuln-responder に A2A で依頼する
+- 有効にすれば、注釈も対応もない新しい修正版ありの Critical を、fraction-agents の vuln-responder に A2A で依頼する。`fix` の mode では、直った版が出た Critical の版上げも頼む
 
 読むだけで、書くのは自分の状態の ConfigMap 1 つと Slack、それに有効にしたときの vuln-responder への依頼だけである。設計の判断は [docs/adr/](docs/adr/) にある。
 
@@ -122,14 +122,20 @@
 
 ## vuln-responder への依頼
 
-`--responder-url` を与えると、即時のアラートと同じ「注釈も対応もない、新しい、修正版のある Critical」を、target ごとに vuln-responder へ A2A 1.0 で依頼する。詳細は [ADR 0009](docs/adr/0009-requesting-triage-from-vuln-responder.md)。
+`--responder-url` を与えると、Critical の発見を target ごとに vuln-responder へ A2A 1.0 で依頼する。詳細は [ADR 0009](docs/adr/0009-requesting-triage-from-vuln-responder.md) と [ADR 0011](docs/adr/0011-requesting-version-bumps-when-a-stage-advances.md)。
+
+| きっかけ | 段階 | 注釈・新しさ | mode | 頼むこと |
+|---|---|---|---|---|
+| `triage` | `unfixed`・`unscannable`・`pending`（`vex-only` では `fixed-upstream` も） | 注釈なし・修正版あり・新しい | 両方 | 解析して対応を判断する |
+| `bump` | `fixed-in-release`（自作）・`fixed-upstream`（外） | 問わない | `fix` だけ | 直った版に fleet-infra の版を上げる PR。Renovate の PR があればそれで足りるか判断する |
+| なし | `fixed-in-main`・`in-git` | | | 頼まない |
 
 | 項目 | 振る舞い |
 |---|---|
 | target | 自作イメージはソースのリポジトリ（例 `yuanying/hshelf`）、それ以外はイメージ（例 `index.docker.io/longhornio/longhorn-engine`） |
-| メッセージ | 人が読む text の part と、`kind` が `vuln-triage/v1` の data の part |
+| メッセージ | 人が読む text の part と、`kind` が `vuln-triage/v1` の data の part。`bump` の発見には直った版のタグと digest、どちらにも Renovate の PR の URL を付ける |
 | context | vuln-responder が採番した contextId を target ごとに覚え、次の依頼を同じ context に続ける。知らないと言われたら新しい context で送り直す |
-| 重複 | target ごとに頼んだ発見（イメージ・脆弱性・パッケージ）を状態の ConfigMap に覚え、頼んでいない発見が増えたときだけ頼む |
+| 重複 | target ごとに頼んだ発見（イメージ・脆弱性・パッケージ、`bump` はそれに段階）を状態の ConfigMap に覚え、頼んでいない発見が増えたときだけ頼む |
 | 同時に | 1 件まで。Task が終わるまで次を送らない |
 | 失敗 | 10 分から倍にして待ち、5 回目の失敗であきらめる |
 | 返事 | Task の状態と、返事にある PR の URL をメトリクスとダイジェストに出す |

@@ -36,10 +36,41 @@ func sourceRepository(source string) (string, bool) {
 	return parts[0] + "/" + strings.TrimSuffix(parts[1], ".git"), true
 }
 
-// responderWanted picks the findings to ask vuln-responder about — new,
-// fixable, unannotated, untreated Criticals — and groups them by target,
-// in the order of the targets' keys (ADR 0009).
-func responderWanted(snap Snapshot, now time.Time, within time.Duration) []responder.Wanted {
+// trigger is what a finding is asked about, or "" (ADR 0011). With mode fix, a
+// Critical whose stage reached a fixed version asks for a bump, annotated or
+// not, new or not. Otherwise a new, fixable, unannotated, untreated Critical
+// asks for triage (ADR 0009).
+func trigger(f Finding, since int64, mode string) string {
+	if f.Vuln.Severity != "CRITICAL" {
+		return ""
+	}
+	if mode == "fix" && (f.Stage == stage.FixedInRelease || f.Stage == stage.FixedUpstream) {
+		return responder.TriggerBump
+	}
+	if !f.Fixable || f.Annotation != nil || !untreated[f.Stage] || f.FirstSeen <= 0 || f.FirstSeen < since {
+		return ""
+	}
+	return responder.TriggerTriage
+}
+
+// fixedIn is the candidate that put a finding at its stage: the release for
+// fixed-in-release, the upstream version for fixed-upstream.
+func fixedIn(view ImageView, st stage.Stage) (CandidateRef, bool) {
+	kind := stage.Release
+	if st == stage.FixedUpstream {
+		kind = stage.Upstream
+	}
+	for _, c := range view.Candidates {
+		if c.Kind == kind {
+			return c.CandidateRef, true
+		}
+	}
+	return CandidateRef{}, false
+}
+
+// responderWanted picks the findings to ask vuln-responder about and groups
+// them by target, in the order of the targets' keys (ADR 0009, ADR 0011).
+func responderWanted(snap Snapshot, now time.Time, within time.Duration, mode string) []responder.Wanted {
 	views := map[string]ImageView{}
 	for _, v := range snap.Images {
 		views[v.Ref.Name()+"@"+v.Ref.Digest] = v
@@ -47,8 +78,8 @@ func responderWanted(snap Snapshot, now time.Time, within time.Duration) []respo
 	since := now.Add(-within).Unix()
 	byTarget := map[string]*responder.Wanted{}
 	for _, f := range snap.Findings {
-		if f.Vuln.Severity != "CRITICAL" || !f.Fixable || f.Annotation != nil || !untreated[f.Stage] ||
-			f.FirstSeen <= 0 || f.FirstSeen < since {
+		trig := trigger(f, since, mode)
+		if trig == "" {
 			continue
 		}
 		view := views[f.Image.Name()+"@"+f.Image.Digest]
@@ -72,6 +103,13 @@ func responderWanted(snap Snapshot, now time.Time, within time.Duration) []respo
 			Image:            f.Image.Name(),
 			Tag:              f.Image.Tag,
 			Digest:           f.Image.Digest,
+			Trigger:          trig,
+			RenovatePRs:      slices.Clone(view.RenovatePRs),
+		}
+		if trig == responder.TriggerBump {
+			if c, ok := fixedIn(view, f.Stage); ok {
+				rf.FixedInTag, rf.FixedInDigest = c.Tag, c.Digest
+			}
 		}
 		for _, wl := range view.Workloads {
 			r := responder.Workload(wl)
@@ -131,7 +169,7 @@ func (t *Tracker) RespondOnce(ctx context.Context) {
 		t.mu.Unlock()
 		return
 	}
-	wanted := responderWanted(t.snapshot, now, t.ResponderNewWithin)
+	wanted := responderWanted(t.snapshot, now, t.ResponderNewWithin, t.Responder.Mode)
 	records := cloneRequests(t.state.Requests)
 	t.mu.Unlock()
 
