@@ -72,7 +72,7 @@ func responderSnapshot() Snapshot {
 }
 
 func TestResponderWanted(t *testing.T) {
-	got := responderWanted(responderSnapshot(), now, 7*24*time.Hour)
+	got := responderWanted(responderSnapshot(), now, 7*24*time.Hour, "vex-only")
 	type summary struct {
 		target string
 		vulns  []string
@@ -98,11 +98,97 @@ func TestResponderWanted(t *testing.T) {
 	f := got[2].Findings[0]
 	wantFinding := responder.Finding{
 		VulnerabilityID: "CVE-1", Severity: "CRITICAL", Package: "json", InstalledVersion: "2.18.0", FixedVersion: "2.19.2",
-		Stage: "unfixed", VexState: "none", Image: "ghcr.io/yuanying/hshelf", Tag: "1.0.0", Digest: "sha256:aa",
+		Stage: "unfixed", VexState: "none", Image: "ghcr.io/yuanying/hshelf", Tag: "1.0.0", Digest: "sha256:aa", Trigger: "triage",
 		Workloads: []responder.Workload{{Namespace: "aphrael", Kind: "ReplicaSet", Name: "aphrael-1", Container: "aphrael"}},
 	}
 	if !reflect.DeepEqual(f, wantFinding) {
 		t.Errorf("finding:\n got %+v\nwant %+v", f, wantFinding)
+	}
+}
+
+// bumpSnapshot has findings whose stages reached a fixed version, annotated
+// or not, new or old, beside ones that do not ask for a bump (ADR 0011).
+func bumpSnapshot() Snapshot {
+	hshelf := imageref.Ref{Registry: "ghcr.io", Repository: "yuanying/hshelf", Tag: "1.0.0", Digest: "sha256:aa"}
+	longhorn := imageref.Ref{Registry: "index.docker.io", Repository: "longhornio/longhorn-engine", Tag: "v1.13.0", Digest: "sha256:ee"}
+	recent := now.Unix() - 24*60*60
+	crit := func(img imageref.Ref, id string, st stage.Stage, firstSeen int64) Finding {
+		return Finding{Image: img, Vuln: Vuln{ID: id, Package: "json", InstalledVersion: "2.18.0", FixedVersion: "2.19.2", Severity: "CRITICAL"}, Stage: st, Fixable: true, FirstSeen: firstSeen}
+	}
+	released := crit(hshelf, "CVE-RELEASED", stage.FixedInRelease, 0)
+	released.Annotation = &annotation.Annotation{State: "upstream"}
+	upstream := crit(longhorn, "CVE-UPSTREAM", stage.FixedUpstream, 0)
+	upstream.Annotation = &annotation.Annotation{State: "upstream"}
+	upstream.Fixable, upstream.Vuln.FixedVersion = false, ""
+	high := crit(hshelf, "CVE-HIGH", stage.FixedInRelease, recent)
+	high.Vuln.Severity = "HIGH"
+	annotatedUnfixed := crit(hshelf, "CVE-ANNOTATED", stage.Unfixed, recent)
+	annotatedUnfixed.Annotation = &annotation.Annotation{State: "upstream"}
+	return Snapshot{
+		At: now,
+		Findings: []Finding{
+			released,
+			upstream,
+			high,
+			annotatedUnfixed,
+			crit(hshelf, "CVE-NEW", stage.Unfixed, recent),
+			crit(hshelf, "CVE-IN-MAIN", stage.FixedInMain, recent),
+			crit(hshelf, "CVE-IN-GIT", stage.InGit, recent),
+			crit(longhorn, "CVE-NEW-UPSTREAM", stage.FixedUpstream, recent),
+		},
+		Images: []ImageView{
+			{Ref: hshelf, SelfBuilt: true, Source: "https://github.com/yuanying/hshelf", Candidates: []CandidateView{
+				{CandidateRef: CandidateRef{Kind: stage.Main, Tag: "main", Digest: "sha256:a1"}, Result: stage.Scanned},
+				{CandidateRef: CandidateRef{Kind: stage.Release, Tag: "1.0.1", Digest: "sha256:a2"}, Result: stage.Scanned},
+			}},
+			{Ref: longhorn, Source: "https://github.com/longhorn/longhorn-engine",
+				Candidates: []CandidateView{
+					{CandidateRef: CandidateRef{Kind: stage.Upstream, Tag: "v1.13.1", Digest: "sha256:e1"}, Result: stage.Scanned},
+				},
+				RenovatePRs: []string{"https://github.com/yuanying/fleet-infra/pull/245"},
+			},
+		},
+	}
+}
+
+func TestResponderWantedBumps(t *testing.T) {
+	type row struct {
+		target, vuln, trigger, stage, tag, digest string
+		renovate                                  []string
+	}
+	rows := func(ws []responder.Wanted) []row {
+		var out []row
+		for _, w := range ws {
+			for _, f := range w.Findings {
+				out = append(out, row{w.Target.Key(), f.VulnerabilityID, f.Trigger, f.Stage, f.FixedInTag, f.FixedInDigest, f.RenovatePRs})
+			}
+		}
+		return out
+	}
+	renovate := []string{"https://github.com/yuanying/fleet-infra/pull/245"}
+	tests := []struct {
+		mode string
+		want []row
+	}{
+		{"fix", []row{
+			{"image:index.docker.io/longhornio/longhorn-engine", "CVE-NEW-UPSTREAM", "bump", "fixed-upstream", "v1.13.1", "sha256:e1", renovate},
+			{"image:index.docker.io/longhornio/longhorn-engine", "CVE-UPSTREAM", "bump", "fixed-upstream", "v1.13.1", "sha256:e1", renovate},
+			{"source:yuanying/hshelf", "CVE-NEW", "triage", "unfixed", "", "", nil},
+			{"source:yuanying/hshelf", "CVE-RELEASED", "bump", "fixed-in-release", "1.0.1", "sha256:a2", nil},
+		}},
+		// vex-only asks what v0.2.0 asked: no bumps.
+		{"vex-only", []row{
+			{"image:index.docker.io/longhornio/longhorn-engine", "CVE-NEW-UPSTREAM", "triage", "fixed-upstream", "", "", renovate},
+			{"source:yuanying/hshelf", "CVE-NEW", "triage", "unfixed", "", "", nil},
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.mode, func(t *testing.T) {
+			got := rows(responderWanted(bumpSnapshot(), now, 7*24*time.Hour, tc.mode))
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("wanted:\n got %v\nwant %v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -136,6 +222,111 @@ func (f *fakeResponder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		result = fmt.Sprintf(`{"id":%q,"contextId":"ctx-1","status":{"state":"TASK_STATE_COMPLETED"},"artifacts":[{"parts":[{"text":"上流待ちとして VEX を書いた。https://github.com/yuanying/fleet-infra/pull/240"}]}]}`, req.Params["id"])
 	}
 	_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":%s}`, result)
+}
+
+// texts are the text parts of the messages sent.
+func (f *fakeResponder) texts() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, m := range f.messages {
+		out = append(out, m["parts"].([]any)[0].(map[string]any)["text"].(string))
+	}
+	return out
+}
+
+func newBumpTracker(t *testing.T, url, mode string) (*Tracker, *memStore) {
+	t.Helper()
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenFile, []byte("a2a-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := &memStore{}
+	tokyo, _ := time.LoadLocation("Asia/Tokyo")
+	sched, _ := digest.ParseSchedule("Mon 09:00", tokyo)
+	tr := &Tracker{
+		Store: store,
+		Slack: &fakeSlack{},
+		Responder: &responder.Requester{
+			Client:      &responder.Client{URL: url, TokenFile: tokenFile},
+			Mode:        mode,
+			TaskTimeout: time.Hour,
+			Log:         logr.Discard(),
+		},
+		Log: logr.Discard(),
+		Now: func() time.Time { return now },
+		Config: Config{
+			DetailSeverities:   map[string]bool{"CRITICAL": true},
+			Location:           tokyo,
+			Schedule:           sched,
+			ResponderNewWithin: 7 * 24 * time.Hour,
+		},
+	}
+	if err := tr.LoadState(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return tr, store
+}
+
+// With mode fix, each target is asked once for its bumps, over the A2A
+// server; the Renovate pull request is in the text. With vex-only, the bumps
+// add no requests (ADR 0011).
+func TestTrackerRequestsBumps(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		mode    string
+		targets []string
+	}{
+		{"fix", []string{"index.docker.io/longhornio/longhorn-engine", "yuanying/hshelf"}},
+		{"vex-only", []string{"index.docker.io/longhornio/longhorn-engine", "yuanying/hshelf"}},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			fake := &fakeResponder{}
+			hs := httptest.NewServer(fake)
+			defer hs.Close()
+			tr, _ := newBumpTracker(t, hs.URL, tc.mode)
+			tr.mu.Lock()
+			tr.snapshot, tr.hasSnapshot = bumpSnapshot(), true
+			tr.mu.Unlock()
+			for range 10 {
+				tr.RespondOnce(ctx)
+			}
+			texts := fake.texts()
+			if len(texts) != len(tc.targets) {
+				t.Fatalf("sent %d requests, want %d:\n%v", len(texts), len(tc.targets), texts)
+			}
+			for i, target := range tc.targets {
+				if !strings.Contains(texts[i], target) {
+					t.Errorf("request %d is not about %s:\n%s", i, target, texts[i])
+				}
+			}
+			longhorn, hshelf := texts[0], texts[1]
+			if !strings.Contains(longhorn, "https://github.com/yuanying/fleet-infra/pull/245") {
+				t.Errorf("the Renovate pull request is not in the text:\n%s", longhorn)
+			}
+			bumps := []struct {
+				text string
+				s    []string
+			}{
+				{longhorn, []string{"CVE-UPSTREAM", "v1.13.1", "sha256:e1"}},
+				{hshelf, []string{"CVE-RELEASED", "1.0.1", "sha256:a2"}},
+			}
+			for _, b := range bumps {
+				for _, s := range b.s {
+					if got := strings.Contains(b.text, s); got != (tc.mode == "fix") {
+						t.Errorf("%q in the text = %v with mode %s:\n%s", s, got, tc.mode, b.text)
+					}
+				}
+			}
+			for _, text := range texts {
+				for _, s := range []string{"CVE-HIGH", "CVE-ANNOTATED", "CVE-IN-MAIN", "CVE-IN-GIT"} {
+					if strings.Contains(text, s) {
+						t.Errorf("%s was asked about:\n%s", s, text)
+					}
+				}
+			}
+		})
+	}
 }
 
 func TestTrackerRequestsTriage(t *testing.T) {
