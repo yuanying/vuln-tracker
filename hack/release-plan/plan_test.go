@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -54,13 +55,17 @@ func TestLatestVersion(t *testing.T) {
 func TestDecide(t *testing.T) {
 	latest := Version{Major: 0, Minor: 2, Patch: 0}
 	renovate := func(subject string) Commit { return Commit{Author: RenovateAuthor, Subject: subject} }
+	responder := func(subject string) Commit { return Commit{Author: VulnResponderAuthor, Subject: subject} }
+	person := Commit{SHA: "0123456789abcdef0123456789abcdef01234567", Author: "OTSUKA, Yuanying", Subject: "Ask vuln-responder over A2A about new untreated Criticals"}
 
 	tests := []struct {
-		name        string
-		commits     []Commit
-		changed     []string
-		wantRelease bool
-		wantReason  string
+		name         string
+		commits      []Commit
+		changed      []string
+		wantRelease  bool
+		wantHeading  string
+		wantReason   string
+		wantBlockers []Commit
 	}{
 		{
 			name: "only Renovate, and the image's content changed",
@@ -70,6 +75,7 @@ func TestDecide(t *testing.T) {
 			},
 			changed:     []string{"go.mod", "go.sum", "Dockerfile"},
 			wantRelease: true,
+			wantHeading: "v0.2.1: dependency updates\n\n",
 		},
 		{
 			name: "a change to the source counts as the image's content",
@@ -78,15 +84,60 @@ func TestDecide(t *testing.T) {
 			},
 			changed:     []string{"internal/registry/client.go"},
 			wantRelease: true,
+			wantHeading: "v0.2.1: dependency updates\n\n",
+		},
+		{
+			name: "only vuln-responder's fix",
+			commits: []Commit{
+				responder("Update golang.org/x/net to v0.47.1 for CVE-2026-0001"),
+			},
+			changed:     []string{"go.mod", "go.sum"},
+			wantRelease: true,
+			wantHeading: "v0.2.1: vulnerability fixes and dependency updates\n\n",
+		},
+		{
+			name: "vuln-responder's fix on top of Renovate's updates",
+			commits: []Commit{
+				renovate("chore(deps): update kubernetes monorepo"),
+				responder("Bump the base image to fix CVE-2026-0002"),
+				renovate("chore(deps): update module golang.org/x/net to v0.47.1"),
+			},
+			changed:     []string{"go.mod", "go.sum", "Dockerfile"},
+			wantRelease: true,
+			wantHeading: "v0.2.1: vulnerability fixes and dependency updates\n\n",
 		},
 		{
 			name: "a commit by someone else leaves the release to a human",
 			commits: []Commit{
 				renovate("chore(deps): update kubernetes monorepo"),
-				{Author: "OTSUKA, Yuanying", Subject: "Ask vuln-responder over A2A about new untreated Criticals"},
+				person,
 			},
-			changed:    []string{"go.mod", "go.sum", "internal/responder/client.go"},
-			wantReason: "not by renovate[bot]",
+			changed:      []string{"go.mod", "go.sum", "internal/responder/client.go"},
+			wantReason:   "not by renovate[bot] or fraction-vuln-responder[bot]",
+			wantBlockers: []Commit{person},
+		},
+		{
+			name: "a person's commit next to vuln-responder's fix leaves the release to a human",
+			commits: []Commit{
+				responder("Update golang.org/x/net to v0.47.1 for CVE-2026-0001"),
+				person,
+				{SHA: "fedcba9876543210fedcba9876543210fedcba98", Author: "O. Yuanying", Subject: "Fix the digest's wording"},
+			},
+			changed:    []string{"go.mod", "go.sum", "internal/digest/digest.go"},
+			wantReason: "2 of the 3 commits since v0.2.0 are not by renovate[bot] or fraction-vuln-responder[bot]",
+			wantBlockers: []Commit{
+				person,
+				{SHA: "fedcba9876543210fedcba9876543210fedcba98", Author: "O. Yuanying", Subject: "Fix the digest's wording"},
+			},
+		},
+		{
+			name: "a name that only resembles the bot's is a person's",
+			commits: []Commit{
+				{Author: "vuln-responder[bot]", Subject: "Update golang.org/x/net"},
+			},
+			changed:      []string{"go.mod"},
+			wantReason:   "not by renovate[bot] or fraction-vuln-responder[bot]",
+			wantBlockers: []Commit{{Author: "vuln-responder[bot]", Subject: "Update golang.org/x/net"}},
 		},
 		{
 			name: "only Renovate, but only the workflows and renovate.json changed",
@@ -122,6 +173,12 @@ func TestDecide(t *testing.T) {
 			if !strings.Contains(got.Reason, tt.wantReason) {
 				t.Errorf("Decide().Reason = %q, want it to contain %q", got.Reason, tt.wantReason)
 			}
+			if !slices.Equal(got.Blockers, tt.wantBlockers) {
+				t.Errorf("Decide().Blockers = %+v, want %+v", got.Blockers, tt.wantBlockers)
+			}
+			if got.Next != "v0.2.1" {
+				t.Errorf("Decide().Next = %q, want v0.2.1", got.Next)
+			}
 			if !got.Release {
 				if got.Version != "" || got.Message != "" {
 					t.Errorf("Decide() without a release has Version %q and Message %q, want both empty", got.Version, got.Message)
@@ -131,8 +188,8 @@ func TestDecide(t *testing.T) {
 			if got.Version != "v0.2.1" {
 				t.Errorf("Decide().Version = %q, want v0.2.1", got.Version)
 			}
-			if !strings.HasPrefix(got.Message, "v0.2.1: dependency updates\n\n") {
-				t.Errorf("Decide().Message = %q, want it to open with the version and say these are dependency updates", got.Message)
+			if !strings.HasPrefix(got.Message, tt.wantHeading) {
+				t.Errorf("Decide().Message = %q, want it to open with %q", got.Message, tt.wantHeading)
 			}
 			for _, c := range tt.commits {
 				if !strings.Contains(got.Message, "- "+c.Subject+"\n") {
@@ -141,6 +198,49 @@ func TestDecide(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSummary(t *testing.T) {
+	person := Commit{SHA: "0123456789abcdef0123456789abcdef01234567", Author: "OTSUKA, Yuanying", Subject: "Ask vuln-responder over A2A"}
+
+	t.Run("a release says which version", func(t *testing.T) {
+		got := Summary(Plan{Release: true, Version: "v0.2.1", Next: "v0.2.1", Reason: "2 commits since v0.2.0"}, "abc")
+		for _, want := range []string{"v0.2.1", "2 commits since v0.2.0"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("Summary() = %q, want it to contain %q", got, want)
+			}
+		}
+		if strings.Contains(got, "git push") {
+			t.Errorf("Summary() = %q, a release needs no command for a person", got)
+		}
+	})
+
+	t.Run("commits that stopped the release are listed with the command to release by hand", func(t *testing.T) {
+		plan := Plan{Next: "v0.2.1", Reason: "not by renovate[bot]", Blockers: []Commit{person}}
+		got := Summary(plan, "89abcdef89abcdef89abcdef89abcdef89abcdef")
+		for _, want := range []string{
+			"not by renovate[bot]",
+			"0123456789ab",
+			"OTSUKA, Yuanying",
+			"Ask vuln-responder over A2A",
+			"git tag -a v0.2.1 89abcdef89abcdef89abcdef89abcdef89abcdef",
+			"git push origin v0.2.1",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("Summary() = %q, want it to contain %q", got, want)
+			}
+		}
+	})
+
+	t.Run("nothing to release asks nothing of a person", func(t *testing.T) {
+		got := Summary(Plan{Next: "v0.2.1", Reason: "no commits since v0.2.0"}, "abc")
+		if !strings.Contains(got, "no commits since v0.2.0") {
+			t.Errorf("Summary() = %q, want it to say why", got)
+		}
+		if strings.Contains(got, "git push") {
+			t.Errorf("Summary() = %q, want no command when nothing a person wrote is waiting", got)
+		}
+	})
 }
 
 func TestIsImageContent(t *testing.T) {
