@@ -59,4 +59,5 @@ gated（ADR 0036）と fraction-agents（ADR 0024）は、同じ Renovate の Gi
 ## 関連 ADR
 
 - [[0008-tests-ci-and-the-published-image]] — イメージの公開。本 ADR は版タグを打つ手を、人の変更を含まない版について機械にも広げた
+- [[0012-releasing-vuln-responder-fixes-on-merge]] — 判定の作者に `fraction-vuln-responder[bot]` を足し、係の PR のマージをきっかけに足した
 - gated ADR 0036、fraction-agents ADR 0024 — 同じ規則の手本
