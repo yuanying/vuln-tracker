@@ -1,11 +1,16 @@
-# The weekly patch release (ADR 0010)
+# The patch release without a person (ADR 0010, ADR 0012)
 #
-# Once a week, releases the next patch version when everything since the
-# latest vX.Y.Z tag is Renovate's and some of it is what the image is built
+# Once a week, and right after a vuln-responder fix is merged into main,
+# releases the next patch version when everything since the latest vX.Y.Z tag
+# is Renovate's or vuln-responder's and some of it is what the image is built
 # from. Anything else is left to a person, who chooses the version and writes
 # the tag's message, as before (ADR 0008). Doing nothing is a success: the
-# run's log says why nothing was released. `make release-plan` asks the same
-# question on a laptop.
+# run's summary says why nothing was released and, when a person's commits
+# stopped it, lists them with the commands to release by hand. `make
+# release-plan` asks the same question on a laptop.
+#
+# A run after a merged fix releases the merge commit itself, not whatever main
+# has become since: a later commit by a person does not hold the fix back.
 #
 # A tag pushed with the run's token starts no workflow, so publish.yml would
 # never see this one. The image is pushed by calling publish.yml first, from
@@ -18,37 +23,69 @@ on:
   schedule:
     - cron: '0 0 * * 1' # Monday 09:00 JST
   workflow_dispatch:
+  # A fix vuln-responder opened is merged (ADR 0012). Its branches start with
+  # vuln-responder/ in this repository; the plan job skips every other pull
+  # request, merged or not, so nothing is released for them. vuln-responder
+  # cannot write .github/, so its fix never changes this file.
+  pull_request:
+    types: [closed]
+    branches: [main]
 
 # Read-only here, and each job widens it to what it alone needs: the call to
 # publish.yml to write the package, the last job to push the tag.
 permissions:
   contents: read
 
+# One release at a time, the weekly run and the run after a fix alike. Every
+# closed pull request starts a run, so only a merged vuln-responder fix joins
+# the group; the others get a group of their own and never take the place of
+# a pending release.
 concurrency:
-  group: ${{ github.workflow }}
+  group: >-
+    ${{
+      (github.event_name != 'pull_request'
+        || (github.event.pull_request.merged
+          && startsWith(github.event.pull_request.head.ref, 'vuln-responder/')
+          && github.event.pull_request.head.repo.full_name == github.repository))
+      && github.workflow
+      || format('{0}-pr-{1}', github.workflow, github.event.pull_request.number)
+    }}
   cancel-in-progress: false
 
 jobs:
   plan:
     name: plan
     # A dispatch can name any branch, but a release is cut from main only.
-    if: github.ref == 'refs/heads/main'
+    # A pull request counts only when it is a merged vuln-responder fix from
+    # this repository; the trigger already limits it to main.
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.pull_request.merged
+      && startsWith(github.event.pull_request.head.ref, 'vuln-responder/')
+      && github.event.pull_request.head.repo.full_name == github.repository
+      || github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       version: ${{ steps.plan.outputs.version }}
       message: ${{ steps.plan.outputs.message }}
+      sha: ${{ steps.head.outputs.sha }}
     steps:
-      # Every tag and the history back to the latest one.
+      # Every tag and the history back to the latest one, at the merge
+      # commit of the fix or at main's head.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      # The commit the image is built from and the tag lands on.
+      - id: head
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - id: plan
-        run: make release-plan RELEASE_PLAN_ARGS="-github-output $GITHUB_OUTPUT"
+        run: make release-plan RELEASE_PLAN_ARGS="-github-output $GITHUB_OUTPUT -step-summary $GITHUB_STEP_SUMMARY"
 
   image:
     name: image
@@ -60,6 +97,7 @@ jobs:
     uses: ./.github/workflows/publish.yml
     with:
       version: ${{ needs.plan.outputs.version }}
+      ref: ${{ needs.plan.outputs.sha }}
 
   tag:
     name: tag
@@ -69,18 +107,19 @@ jobs:
     permissions:
       contents: write
     steps:
-      # Annotated, like the tags people push. github.sha is the same in every
-      # job of this run, so the tag lands on the commit the image was built
-      # from. The token is the one GitHub mints for this run, as in
-      # publish.yml; the permissions above are its ceiling.
+      # Annotated, like the tags people push, on the commit the plan was made
+      # for and the image was built from. The token is the one GitHub mints
+      # for this run, as in publish.yml; the permissions above are its
+      # ceiling.
       - name: Push the tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.plan.outputs.version }}
           MESSAGE: ${{ needs.plan.outputs.message }}
+          SHA: ${{ needs.plan.outputs.sha }}
         run: |
           object="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags" \
-            -f tag="$VERSION" -f message="$MESSAGE" -f object="$GITHUB_SHA" -f type=commit \
+            -f tag="$VERSION" -f message="$MESSAGE" -f object="$SHA" -f type=commit \
             --jq .sha)"
           gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
             -f ref="refs/tags/${VERSION}" -f sha="$object" >/dev/null

@@ -11,6 +11,16 @@ import (
 // RenovateAuthor is the author name git records for Renovate's commits.
 const RenovateAuthor = "renovate[bot]"
 
+// VulnResponderAuthor is the author name git records for the commits
+// vuln-responder writes in its fix pull requests (ADR 0012).
+const VulnResponderAuthor = "fraction-vuln-responder[bot]"
+
+// isBot reports whether author is one whose commits are released without a
+// person: Renovate's dependency updates and vuln-responder's fixes.
+func isBot(author string) bool {
+	return author == RenovateAuthor || author == VulnResponderAuthor
+}
+
 // Version is a release version, vMAJOR.MINOR.PATCH.
 type Version struct {
 	Major, Minor, Patch int
@@ -81,48 +91,96 @@ func IsImageContent(path string) bool {
 
 // Commit is one non-merge commit between the latest version and HEAD.
 type Commit struct {
+	SHA     string
 	Author  string
 	Subject string
 }
 
-// Plan is what the weekly run does. Without a release, Version and Message
-// are empty and Reason says why nothing is released.
+// Plan is what the run does. Without a release, Version and Message are
+// empty and Reason says why nothing is released.
 type Plan struct {
 	Release bool
 	Version string
 	// Message is the annotated tag's message.
 	Message string
 	Reason  string
+	// Next is the next patch version, released or not: the one a person
+	// would tag by hand.
+	Next string
+	// Blockers are the commits by someone other than the bots, which leave
+	// the release to a person.
+	Blockers []Commit
 }
 
 // Decide whether the commits since latest are released as the next patch
-// version (ADR 0010). It is released only when every commit is Renovate's and
-// at least one changed path is part of the image. Anything a person wrote is
-// released by that person, who chooses the version and writes the message.
+// version (ADR 0010, ADR 0012). It is released only when every commit is
+// Renovate's or vuln-responder's and at least one changed path is part of the
+// image. Anything a person wrote is released by that person, who chooses the
+// version and writes the message.
 func Decide(latest Version, commits []Commit, changed []string) Plan {
+	next := Version{Major: latest.Major, Minor: latest.Minor, Patch: latest.Patch + 1}
 	if len(commits) == 0 {
-		return Plan{Reason: fmt.Sprintf("no commits since %s", latest)}
+		return Plan{Next: next.String(), Reason: fmt.Sprintf("no commits since %s", latest)}
 	}
+	var blockers []Commit
+	fixes := false
 	for _, c := range commits {
-		if c.Author != RenovateAuthor {
-			return Plan{Reason: fmt.Sprintf("%q by %s is not by %s; releasing it is left to a person", c.Subject, c.Author, RenovateAuthor)}
+		if !isBot(c.Author) {
+			blockers = append(blockers, c)
+		}
+		fixes = fixes || c.Author == VulnResponderAuthor
+	}
+	if len(blockers) > 0 {
+		first := blockers[0]
+		return Plan{
+			Next:     next.String(),
+			Blockers: blockers,
+			Reason: fmt.Sprintf("%d of the %d commits since %s are not by %s or %s, the first %q by %s; releasing them is left to a person",
+				len(blockers), len(commits), latest, RenovateAuthor, VulnResponderAuthor, first.Subject, first.Author),
 		}
 	}
 	if !slices.ContainsFunc(changed, IsImageContent) {
-		return Plan{Reason: fmt.Sprintf("Renovate's commits since %s change nothing the image is built from (%s)", latest, strings.Join(imageContent, ", "))}
+		return Plan{Next: next.String(), Reason: fmt.Sprintf("the bots' commits since %s change nothing the image is built from (%s)", latest, strings.Join(imageContent, ", "))}
 	}
 
-	next := Version{Major: latest.Major, Minor: latest.Minor, Patch: latest.Patch + 1}
+	heading := "dependency updates"
+	if fixes {
+		heading = "vulnerability fixes and dependency updates"
+	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s: dependency updates\n\n", next)
-	fmt.Fprintf(&b, "Only Renovate's dependency updates since %s, released by the\nweekly workflow (ADR 0010):\n\n", latest)
+	fmt.Fprintf(&b, "%s: %s\n\n", next, heading)
+	fmt.Fprintf(&b, "Only commits by %s and %s since %s,\nreleased without a person (ADR 0010, ADR 0012):\n\n", RenovateAuthor, VulnResponderAuthor, latest)
 	for _, c := range commits {
 		fmt.Fprintf(&b, "- %s\n", c.Subject)
 	}
 	return Plan{
 		Release: true,
 		Version: next.String(),
+		Next:    next.String(),
 		Message: b.String(),
-		Reason:  fmt.Sprintf("%d commits since %s, all by %s, and the image's content changed", len(commits), latest, RenovateAuthor),
+		Reason:  fmt.Sprintf("%d commits since %s, all by %s or %s, and the image's content changed", len(commits), latest, RenovateAuthor, VulnResponderAuthor),
 	}
+}
+
+// Summary is the Markdown the run writes to its job summary. When commits by
+// a person stopped the release, it lists them and the commands that release
+// head by hand, as a person always could (ADR 0008).
+func Summary(plan Plan, head string) string {
+	var b strings.Builder
+	if plan.Release {
+		fmt.Fprintf(&b, "### Releasing %s\n\n%s\n", plan.Version, plan.Reason)
+		return b.String()
+	}
+	fmt.Fprintf(&b, "### No release\n\n%s\n", plan.Reason)
+	if len(plan.Blockers) == 0 {
+		return b.String()
+	}
+	b.WriteString("\nThe commits that stopped it:\n\n")
+	for _, c := range plan.Blockers {
+		fmt.Fprintf(&b, "- `%.12s` %s (%s)\n", c.SHA, c.Subject, c.Author)
+	}
+	fmt.Fprintf(&b, "\nTo release %s by hand, write what changed in the message and push the tag;\n", head)
+	fmt.Fprintf(&b, "the publish workflow builds the image for it:\n\n")
+	fmt.Fprintf(&b, "```sh\ngit fetch origin --tags\ngit tag -a %s %s\ngit push origin %s\n```\n", plan.Next, head, plan.Next)
+	return b.String()
 }

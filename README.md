@@ -159,7 +159,7 @@
 
 イメージは `ghcr.io/yuanying/vuln-tracker`。main への push で `:main`、`v*` のタグでそのタグが出る。
 
-最新の `vX.Y.Z` のタグ以降のコミットが（マージコミットを除き）すべて Renovate のもので、イメージの中身（Dockerfile・`go.mod`・`go.sum`・`cmd/`・`internal/`）を変えていれば、`release` のワークフローが毎週月曜 09:00 JST にパッチ版を出す（ADR 0010）。人のコミットが 1 つでもあれば自動では出さない。Actions の画面から `release` を手で起動（workflow_dispatch、ブランチは main）しても同じ判定で動く。次の実行が何をするかは `make release-plan` で手元から確かめられる。
+最新の `vX.Y.Z` のタグ以降のコミットが（マージコミットを除き）すべて Renovate（`renovate[bot]`）か vuln-responder（`fraction-vuln-responder[bot]`）のもので、イメージの中身（Dockerfile・`go.mod`・`go.sum`・`cmd/`・`internal/`）を変えていれば、`release` のワークフローがパッチ版を出す。動くのは毎週月曜 09:00 JST（ADR 0010）と、ブランチが `vuln-responder/` で始まる PR が main にマージされた直後（ADR 0012）である。人のコミットが 1 つでもあれば自動では出さず、実行の summary に止めたコミットと手で出すコマンドを書く。Actions の画面から `release` を手で起動（workflow_dispatch、ブランチは main）しても同じ判定で動く。次の実行が何をするかは `make release-plan` で手元から確かめられる。
 
 ## 開発
 
@@ -169,4 +169,4 @@
 | `make lint` | golangci-lint |
 | `make vet` | gofmt の検査と go vet |
 | `make image` | イメージを手元でビルド |
-| `make release-plan` | 週次のリリースが次に何をするかと、その理由（ADR 0010） |
+| `make release-plan` | 自動のリリースが次に何をするかと、その理由（ADR 0010・0012） |

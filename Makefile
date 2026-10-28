@@ -84,11 +84,11 @@ image: ## Build the container image locally.
 
 ##@ Release
 
-# What the weekly release workflow asks before it releases anything (ADR 0010).
+# What the release workflow asks before it releases anything (ADR 0010, ADR 0012).
 # Run on a checkout with its tags to see what the next run would do; the
 # workflow passes `-github-output` through RELEASE_PLAN_ARGS.
 .PHONY: release-plan
-release-plan: ## Say whether the weekly run would release the next patch version, and why.
+release-plan: ## Say whether the release workflow would release the next patch version, and why.
 	$(GO) run ./hack/release-plan $(RELEASE_PLAN_ARGS)
 
 ##@ Housekeeping

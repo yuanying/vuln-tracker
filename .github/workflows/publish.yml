@@ -10,16 +10,17 @@
 # main also deletes the versions it leaves untagged; tagged versions are never
 # touched.
 #
-# The weekly release (release.yml, ADR 0010) calls this with the version it is
-# about to tag. A tag pushed with the run's token starts no workflow, so the
-# image for that version is pushed here first, from the commit about to be
-# tagged, and the tag only follows once the image exists.
+# The release workflow (release.yml, ADR 0010, ADR 0012) calls this with the
+# version it is about to tag and the commit it will tag. A tag pushed with the
+# run's token starts no workflow, so the image for that version is pushed here
+# first, from that commit, and the tag only follows once the image exists.
 name: publish
 
 # Push events, and the call from release.yml. A pull request from a fork
 # raises no push event in this repository, so nothing a fork wrote reaches the
-# job that can write packages. release.yml runs on a schedule or by hand, only
-# for main, and so never for a pull request either.
+# job that can write packages. release.yml runs on a schedule, by hand, or
+# after a vuln-responder fix from this repository is merged, and always for a
+# commit on main.
 on:
   push:
     branches: [main]
@@ -28,6 +29,10 @@ on:
     inputs:
       version:
         description: The version tag release.yml is about to push (vX.Y.Z).
+        type: string
+        required: true
+      ref:
+        description: The commit release.yml is about to tag, which the image is built from.
         type: string
         required: true
 
@@ -47,6 +52,9 @@ env:
   # The ref this image is named after: the pushed one, or the version tag
   # release.yml is about to push.
   TAG: ${{ inputs.version || github.ref_name }}
+  # The commit the image is built from: the pushed one, or the one
+  # release.yml is about to tag.
+  REVISION: ${{ inputs.ref || github.sha }}
 
 jobs:
   test:
@@ -55,6 +63,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -71,7 +81,10 @@ jobs:
       contents: read
       packages: write
     steps:
+      # The pushed commit, or the one release.yml is about to tag.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
 
       # Only linux/amd64: the cluster's workers are amd64.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -98,7 +111,7 @@ jobs:
           provenance: false
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ env.REVISION }}
             org.opencontainers.image.version=${{ env.TAG }}
 
       - name: Say what was published
@@ -106,7 +119,7 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
           SERVER: ${{ github.server_url }}
           REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
+          SHA: ${{ env.REVISION }}
         run: |
           {
             echo "### ${IMAGE}:${TAG}"
