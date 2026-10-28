@@ -57,3 +57,4 @@ pull request ごとに vet・lint・test（envtest を含む）・`go.mod` の t
 - [[0001-a-resident-tracker-for-remediation-stages]]
 - [[0003-scanning-candidates-through-the-shared-trivy-server]]
 - [[0007-read-only-credentials]]
+- [[0010-weekly-dependency-release]] — 版タグを、人の変更を含まない版については機械も打つ

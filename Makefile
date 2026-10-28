@@ -82,6 +82,15 @@ test: envtest-bin ## Run every test, the envtest layer included.
 image: ## Build the container image locally.
 	docker build -t $(IMAGE) .
 
+##@ Release
+
+# What the weekly release workflow asks before it releases anything (ADR 0010).
+# Run on a checkout with its tags to see what the next run would do; the
+# workflow passes `-github-output` through RELEASE_PLAN_ARGS.
+.PHONY: release-plan
+release-plan: ## Say whether the weekly run would release the next patch version, and why.
+	$(GO) run ./hack/release-plan $(RELEASE_PLAN_ARGS)
+
 ##@ Housekeeping
 
 .PHONY: tidy

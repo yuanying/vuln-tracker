@@ -9,27 +9,44 @@
 # The tests run first and the image is pushed only when they pass. A push to
 # main also deletes the versions it leaves untagged; tagged versions are never
 # touched.
+#
+# The weekly release (release.yml, ADR 0010) calls this with the version it is
+# about to tag. A tag pushed with the run's token starts no workflow, so the
+# image for that version is pushed here first, from the commit about to be
+# tagged, and the tag only follows once the image exists.
 name: publish
 
-# Push events only: a pull request from a fork raises none in this
-# repository, so nothing a fork wrote reaches the job that can write packages.
+# Push events, and the call from release.yml. A pull request from a fork
+# raises no push event in this repository, so nothing a fork wrote reaches the
+# job that can write packages. release.yml runs on a schedule or by hand, only
+# for main, and so never for a pull request either.
 on:
   push:
     branches: [main]
     tags: ['v*']
+  workflow_call:
+    inputs:
+      version:
+        description: The version tag release.yml is about to push (vX.Y.Z).
+        type: string
+        required: true
 
 permissions:
   contents: read
 
 # The later of two pushes to main should win the `main` tag. Cancelling is
-# per ref, so a version tag is never cancelled by a push to main.
+# per ref, so a version tag is never cancelled by a push to main. A call from
+# release.yml runs for main as well, and is keyed on its version so that a
+# push to main does not cancel it.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ inputs.version || github.ref }}
   cancel-in-progress: true
 
 env:
   IMAGE: ghcr.io/${{ github.repository }}
-  TAG: ${{ github.ref_name }}
+  # The ref this image is named after: the pushed one, or the version tag
+  # release.yml is about to push.
+  TAG: ${{ inputs.version || github.ref_name }}
 
 jobs:
   test:
@@ -102,7 +119,9 @@ jobs:
   # one untagged; nothing asks for those by digest. The action keeps the
   # platform manifests of tagged images, so it stays safe if a platform is
   # added. Pushes to main share one concurrency group, so two of these never
-  # run against the package at once.
+  # run against the package at once. A call from release.yml never runs it: a
+  # cleanup that failed there would fail the call and leave the version
+  # untagged.
   cleanup:
     name: cleanup
     needs: image
