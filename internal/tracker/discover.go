@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/yuanying/vuln-tracker/internal/github"
-	"github.com/yuanying/vuln-tracker/internal/imageref"
 	"github.com/yuanying/vuln-tracker/internal/manifests"
+	"github.com/yuanying/vuln-tracker/internal/pipeline"
 	"github.com/yuanying/vuln-tracker/internal/registry"
 	"github.com/yuanying/vuln-tracker/internal/series"
 	"github.com/yuanying/vuln-tracker/internal/sources"
@@ -261,46 +261,11 @@ func (d *Discoverer) renovatePRs(name string, prs []github.PullRequest) []string
 	if d.RenovateAuthor == nil {
 		return nil
 	}
-	// Renovate writes the name the manifest wrote, which may or may not
-	// carry the registry.
-	names := []string{name, imageref.ShortName(name)}
-	if strings.HasPrefix(name, "index.docker.io/") {
-		names = append(names, "docker.io/"+strings.TrimPrefix(name, "index.docker.io/"))
-	}
 	var out []string
 	for _, pr := range prs {
-		if !d.RenovateAuthor.MatchString(pr.Author) {
-			continue
-		}
-		for _, n := range names {
-			if mentions(pr.Title, n) || mentions(pr.Body, n) {
-				out = append(out, pr.URL)
-				break
-			}
+		if d.RenovateAuthor.MatchString(pr.Author) && (pipeline.MentionsImage(pr.Title, name) || pipeline.MentionsImage(pr.Body, name)) {
+			out = append(out, pr.URL)
 		}
 	}
 	return out
-}
-
-// mentions reports whether text names the image as a whole word, so that
-// "nginx" does not match "nginx-exporter".
-func mentions(text, image string) bool {
-	for i := 0; ; {
-		j := strings.Index(text[i:], image)
-		if j < 0 {
-			return false
-		}
-		start, end := i+j, i+j+len(image)
-		before := start == 0 || !nameChar(text[start-1])
-		after := end == len(text) || !nameChar(text[end])
-		if before && after {
-			return true
-		}
-		i = start + 1
-	}
-}
-
-func nameChar(b byte) bool {
-	return b == '-' || b == '_' || b == '/' || b == '.' ||
-		('a' <= b && b <= 'z') || ('A' <= b && b <= 'Z') || ('0' <= b && b <= '9')
 }
