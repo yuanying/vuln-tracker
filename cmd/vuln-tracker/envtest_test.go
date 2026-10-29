@@ -194,7 +194,7 @@ func TestAgainstAnAPIServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tr := newTracker(mgr, cfg)
+	tr := newTracker(mgr, cfg, &github.Client{})
 	tr.Discoverer.Registry = fakeRegistry{}
 	tr.Discoverer.RenovateAuthor = regexp.MustCompile("renovate")
 	tr.Scanner = fakeScanner{}

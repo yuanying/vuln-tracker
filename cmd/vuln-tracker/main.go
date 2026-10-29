@@ -35,6 +35,7 @@ import (
 	"github.com/yuanying/vuln-tracker/internal/config"
 	"github.com/yuanying/vuln-tracker/internal/digest"
 	"github.com/yuanying/vuln-tracker/internal/github"
+	"github.com/yuanying/vuln-tracker/internal/githubapp"
 	"github.com/yuanying/vuln-tracker/internal/registry"
 	"github.com/yuanying/vuln-tracker/internal/responder"
 	"github.com/yuanying/vuln-tracker/internal/scanner"
@@ -78,7 +79,11 @@ func run(args []string) error {
 		return fmt.Errorf("registering the readiness check: %w", err)
 	}
 
-	t := newTracker(mgr, cfg)
+	gh, err := newGitHub(cfg)
+	if err != nil {
+		return err
+	}
+	t := newTracker(mgr, cfg, gh)
 	if err := watch(mgr, t); err != nil {
 		return err
 	}
@@ -88,7 +93,7 @@ func run(args []string) error {
 	ctrlmetrics.Registry.MustRegister(&tracker.Collector{DetailSeverities: cfg.DetailSeverities, Snapshot: t.Snapshot, Requests: t.ResponderRequests})
 
 	log.Info("starting", "trivyServer", cfg.TrivyServer, "fleetInfra", cfg.FleetInfra.Name, "detailSeverities", cfg.DetailSeverities,
-		"responder", cfg.ResponderURL, "responderMode", cfg.ResponderMode)
+		"responder", cfg.ResponderURL, "responderMode", cfg.ResponderMode, "githubApp", cfg.GitHubAppID != 0)
 	return mgr.Start(ctrl.SetupSignalHandler())
 }
 
@@ -117,7 +122,28 @@ func managerOptions(cfg config.Config) ctrl.Options {
 	}
 }
 
-func newTracker(mgr manager.Manager, cfg config.Config) *tracker.Tracker {
+// newGitHub reads GitHub with the App's installation tokens when an App ID is
+// given, and with $GITHUB_TOKEN otherwise (ADR 0013). An App whose key cannot
+// be read is a configuration error: better not to start than to read
+// anonymously and miss every private repository.
+func newGitHub(cfg config.Config) (*github.Client, error) {
+	hc := &http.Client{Timeout: 2 * time.Minute}
+	if cfg.GitHubAppID == 0 {
+		return &github.Client{Token: cfg.GitHubToken, HTTP: hc}, nil
+	}
+	key, err := os.ReadFile(cfg.GitHubAppPrivateKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("reading the GitHub App private key: %w", err)
+	}
+	tokens, err := githubapp.NewTokenSource("https://api.github.com", cfg.GitHubAppID, cfg.GitHubAppInstallationID, key)
+	if err != nil {
+		return nil, err
+	}
+	hc.Transport = &githubapp.Transport{Source: tokens}
+	return &github.Client{HTTP: hc}, nil
+}
+
+func newTracker(mgr manager.Manager, cfg config.Config, gh *github.Client) *tracker.Tracker {
 	var slack tracker.Sender
 	if cfg.SlackWebhookURL != "" {
 		slack = &digest.Slack{WebhookURL: cfg.SlackWebhookURL, HTTP: &http.Client{Timeout: 30 * time.Second}}
@@ -138,7 +164,7 @@ func newTracker(mgr manager.Manager, cfg config.Config) *tracker.Tracker {
 			TempDir:   cfg.TrivyTempDir,
 			Timeout:   cfg.ScanTimeout,
 		},
-		GitHub:    &github.Client{Token: cfg.GitHubToken, HTTP: &http.Client{Timeout: 2 * time.Minute}},
+		GitHub:    gh,
 		Slack:     slack,
 		Responder: newResponder(cfg, ctrl.Log.WithName("responder")),
 		Metrics:   tracker.NewMetrics(ctrlmetrics.Registry),

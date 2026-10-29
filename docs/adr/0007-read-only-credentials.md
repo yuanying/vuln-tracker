@@ -51,6 +51,15 @@ vuln-responder への依頼（ADR 0009）で、書く先に「vuln-responder へ
 書ける範囲は vuln-responder の側の設定で絞る。projected token は Kubernetes の RBAC を要さないので、
 上の Kubernetes の権限の表は変わらない。
 
+### 追記（2026-10-29、ADR 0013）
+
+GitHub の資格は、専用の GitHub App の installation token に移した（ADR 0013）。権限は Contents・
+Pull requests・Metadata の読み取りだけで、持ち主の全リポジトリにインストールする。token は失効の前に
+集計役が入れ替える。上の表の GitHub の行の「fine-grained PAT か GitHub App」と「入れ替える仕組みが無いうちは PAT」は
+ADR 0013 で置き換わり、`GITHUB_TOKEN` は `--github-app-id` が 0 のときの後方互換として残る。
+App の private key は Secret をファイルでマウントする（環境変数にしない）。
+読む先には、自作のイメージのソースのリポジトリの PR が加わった（ADR 0014）。
+
 ## Consequences
 
 - 集計役が乗っ取られても、書けるのは Slack の 1 チャンネルと自分の ConfigMap と、vuln-responder への依頼だけである
@@ -65,3 +74,4 @@ vuln-responder への依頼（ADR 0009）で、書く先に「vuln-responder へ
 - [[0002-remediation-stages]]
 - [[0006-weekly-digest-and-durable-state]]
 - [[0009-requesting-triage-from-vuln-responder]]
+- [[0013-a-dedicated-github-app]]
