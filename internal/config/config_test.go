@@ -139,3 +139,46 @@ func TestInvalid(t *testing.T) {
 		}
 	}
 }
+
+func TestGitHubAppAndAPIDefaults(t *testing.T) {
+	c, err := Parse([]string{"--namespace=x"}, env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// App ID 0 keeps $GITHUB_TOKEN (ADR 0013).
+	if c.GitHubAppID != 0 || c.GitHubAppInstallationID != 0 || c.GitHubAppPrivateKeyFile != "/var/run/secrets/github-app/private-key.pem" {
+		t.Errorf("github app: %d %d %q", c.GitHubAppID, c.GitHubAppInstallationID, c.GitHubAppPrivateKeyFile)
+	}
+	if c.APIAddr != ":8082" {
+		t.Errorf("api: %q", c.APIAddr)
+	}
+}
+
+func TestGitHubAppFlags(t *testing.T) {
+	c, err := Parse([]string{
+		"--namespace=x",
+		"--github-app-id=12345",
+		"--github-app-installation-id=678",
+		"--github-app-private-key-file=/tmp/key.pem",
+		"--api-bind-address=:9000",
+	}, env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GitHubAppID != 12345 || c.GitHubAppInstallationID != 678 || c.GitHubAppPrivateKeyFile != "/tmp/key.pem" || c.APIAddr != ":9000" {
+		t.Errorf("got %+v", c)
+	}
+}
+
+func TestGitHubAppInvalid(t *testing.T) {
+	tests := map[string][]string{
+		"app without installation": {"--namespace=x", "--github-app-id=1"},
+		"app without key file":     {"--namespace=x", "--github-app-id=1", "--github-app-installation-id=2", "--github-app-private-key-file="},
+		"negative app id":          {"--namespace=x", "--github-app-id=-1"},
+	}
+	for name, args := range tests {
+		if _, err := Parse(args, env(nil)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

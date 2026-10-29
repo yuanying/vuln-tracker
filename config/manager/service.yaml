@@ -1,5 +1,5 @@
-# /metrics for Prometheus. config/prometheus has a ServiceMonitor for
-# kube-prometheus.
+# /metrics for Prometheus (config/prometheus has a ServiceMonitor for
+# kube-prometheus) and the JSON API, for gated's Ingress (ADR 0015).
 apiVersion: v1
 kind: Service
 metadata:
@@ -14,4 +14,8 @@ spec:
     - name: metrics
       port: 8080
       targetPort: metrics
+      protocol: TCP
+    - name: api
+      port: 8082
+      targetPort: api
       protocol: TCP

@@ -52,8 +52,16 @@ type Config struct {
 	ResponderTaskTimeout  time.Duration
 	ResponderPollInterval time.Duration
 
+	// The GitHub App whose installation tokens read GitHub (ADR 0013). An
+	// App ID of 0 reads with $GITHUB_TOKEN instead.
+	GitHubAppID             int64
+	GitHubAppInstallationID int64
+	GitHubAppPrivateKeyFile string
+
 	MetricsAddr string
 	ProbeAddr   string
+	// APIAddr is where the JSON API is served (ADR 0015); "0" turns it off.
+	APIAddr     string
 	LeaderElect bool
 
 	// From the environment.
@@ -99,8 +107,12 @@ func Parse(args []string, getenv func(string) string, extra ...func(*flag.FlagSe
 	fs.DurationVar(&c.ResponderNewWithin, "responder-new-within", 7*24*time.Hour, "Findings first seen this recently are asked about.")
 	fs.DurationVar(&c.ResponderTaskTimeout, "responder-task-timeout", 3*time.Hour, "How long a vuln-responder task is waited for.")
 	fs.DurationVar(&c.ResponderPollInterval, "responder-poll-interval", time.Minute, "How often a request is sent or its task looked at.")
+	fs.Int64Var(&c.GitHubAppID, "github-app-id", 0, "ID of the GitHub App that reads GitHub. 0: read with $GITHUB_TOKEN instead.")
+	fs.Int64Var(&c.GitHubAppInstallationID, "github-app-installation-id", 0, "ID of the App's installation on the owner of the repositories.")
+	fs.StringVar(&c.GitHubAppPrivateKeyFile, "github-app-private-key-file", "/var/run/secrets/github-app/private-key.pem", "PEM private key of the GitHub App.")
 	fs.StringVar(&c.MetricsAddr, "metrics-bind-address", ":8080", "Address /metrics is served on.")
 	fs.StringVar(&c.ProbeAddr, "health-probe-bind-address", ":8081", "Address /healthz and /readyz are served on.")
+	fs.StringVar(&c.APIAddr, "api-bind-address", ":8082", "Address the JSON API (/api/findings) is served on. 0: not served.")
 	fs.BoolVar(&c.LeaderElect, "leader-elect", false, "Use leader election. Off: the tracker runs as one replica (ADR 0001).")
 	for _, f := range extra {
 		f(fs)
@@ -123,6 +135,14 @@ func Parse(args []string, getenv func(string) string, extra ...func(*flag.FlagSe
 	}
 	if c.ResponderMode != "vex-only" && c.ResponderMode != "fix" {
 		errs = append(errs, fmt.Errorf("--responder-mode: %q is not vex-only or fix", c.ResponderMode))
+	}
+	switch {
+	case c.GitHubAppID < 0:
+		errs = append(errs, errors.New("--github-app-id must not be negative"))
+	case c.GitHubAppID > 0 && c.GitHubAppInstallationID <= 0:
+		errs = append(errs, errors.New("--github-app-installation-id is required with --github-app-id"))
+	case c.GitHubAppID > 0 && c.GitHubAppPrivateKeyFile == "":
+		errs = append(errs, errors.New("--github-app-private-key-file is required with --github-app-id"))
 	}
 	for _, d := range []struct {
 		flag string

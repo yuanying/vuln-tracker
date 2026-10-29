@@ -1,6 +1,6 @@
 # vuln-tracker
 
-本番クラスタで動くイメージの脆弱性について、対応の段階と注釈（OpenVEX）を集計してメトリクスと週次ダイジェストに出す集計役。
+本番クラスタで動くイメージの脆弱性について、対応の段階と注釈（OpenVEX）を集計してメトリクス・週次ダイジェスト・JSON の API に出す集計役。
 
 ## 何をするか
 
@@ -9,6 +9,7 @@
 - 候補のスキャンの結果から、発見ごとに **段階** を決める
 - fleet-infra の `security/vex/` の OpenVEX の注釈を、Trivy と同じ規則で当てる
 - 段階と注釈を Prometheus のメトリクスとして出し、週次のダイジェストを Slack に送る
+- 発見ごとに、ソース側とマニフェスト側の 2 軸の状態を決め、結び付いた PR と一緒に JSON の API（`GET /api/findings`）で出す
 - 有効にすれば、注釈も対応もない新しい修正版ありの Critical を、fraction-agents の vuln-responder に A2A で依頼する。`fix` の mode では、直った版が出た Critical の版上げも頼む
 
 読むだけで、書くのは自分の状態の ConfigMap 1 つと Slack、それに有効にしたときの vuln-responder への依頼だけである。設計の判断は [docs/adr/](docs/adr/) にある。
@@ -31,6 +32,41 @@
 - **外** はそれ以外。候補は同じ系列（`v` の有無・major・数字の数・接尾辞が同じ）の最新版、git に書かれた版。`latest` のように版の無いタグは、同じタグの digest が変わったらその digest
 - 段階の詳しい定義は [ADR 0002](docs/adr/0002-remediation-stages.md)
 
+## 2 軸の状態と PR
+
+段階は 1 つの値だが、同じスキャンの結果から、ソース側とマニフェスト側を別々にも決める。詳しい定義は [ADR 0014](docs/adr/0014-two-axes-of-remediation-and-linked-pull-requests.md)。
+
+| ソース側（自作だけ） | 意味 |
+|---|---|
+| `unaddressed` | `:main` でもリリースでも残っていて、結び付いた開いている PR が無い |
+| `pr-open` | ソースのリポジトリに、結び付いた開いている PR がある |
+| `merged` | `:main` では消えている（`fixed-in-main`） |
+| `released` | 最新のリリースで消えている |
+| `not-applicable` | 自作でないイメージ |
+| `unknown` | 答えになる候補がまだスキャンされていないか、スキャンできない |
+
+| マニフェスト側（すべて） | 意味 |
+|---|---|
+| `no-fix` | 版上げの先（自作のリリース・上流の同じ系列の新しい版）で消えたものがまだ無い |
+| `unaddressed` | 版上げの先はあるが、マニフェストのリポジトリに結び付いた開いている PR が無い |
+| `pr-open` | 版上げの先があり、マニフェストのリポジトリに結び付いた開いている PR がある |
+| `merged` | git に書かれた版では消えている（`in-git`）。apply 待ち |
+| `unknown` | 答えになる候補がまだスキャンされていないか、スキャンできない |
+
+PR は「直すつもり」の印で、直ったかどうかはスキャンで決める。結び付けるのは次の 3 つである。
+
+| 理由 | 条件 |
+|---|---|
+| `vuln-responder` | その発見を含む依頼に vuln-responder が返した PR（状態を問わない） |
+| `renovate` | Renovate の開いている PR で、マニフェストのリポジトリならイメージ名、ソースのリポジトリならパッケージ名が書かれているもの |
+| `mentions-id` | タイトルか本文に脆弱性の ID（`CVE-…`・`GHSA-…` など）が書かれている開いている PR |
+
+マニフェストのリポジトリの PR のうち、`security/vex/` の下しか変えないものは、注釈として別に出す（どちらの軸にも数えない）。
+
+## JSON の API
+
+`--api-bind-address`（既定 `:8082`、ポート名 `api`）で `GET /api/findings` を出す。`--detail-severities` の重大度の発見を、段階・2 軸・結び付いた PR・注釈・動いている場所と一緒に返す。起動の直後、リポジトリとレジストリを 1 回読み終えるまでは 503 を返す。認証は持たず、gated の Ingress の内側に置く前提である。本文の形は [ADR 0015](docs/adr/0015-json-api-contract.md) が契約で、呼び出し側は未知のキーを無視する。
+
 ## メトリクス
 
 `image` は `<registry>/<repository>`（Docker Hub は `index.docker.io`、公式イメージは `library/`）。fleet-infra の VEX のファイル `security/vex/<image>.openvex.json` と同じ名前である。契約の全体と理由は [ADR 0005](docs/adr/0005-metrics-contract.md)。
@@ -45,7 +81,7 @@
 | `vuln_tracker_image_renovate_pr_info` | `image` `url` | 1 |
 | `vuln_tracker_scans_total` | `result` | スキャンの本数 |
 | `vuln_tracker_scan_duration_seconds` | | スキャンの所要時間（histogram） |
-| `vuln_tracker_sync_timestamp_seconds` | `target`（`fleet-infra` `k8s-manifests-fraction` `registry`） | 最後に読めた時刻 |
+| `vuln_tracker_sync_timestamp_seconds` | `target`（`fleet-infra` `k8s-manifests-fraction` `registry` `pull-requests`） | 最後に読めた時刻 |
 | `vuln_tracker_sync_errors_total` | `target`（上に `vex` を加える） | 読めなかった回数 |
 | `vuln_tracker_digest_sent_timestamp_seconds` | | 最後にダイジェストを送れた時刻 |
 | `vuln_tracker_responder_request_info` | `target` `target_type` `state` `pr` | vuln-responder への依頼の状態が最後に変わった時刻。target ごとに 1 系列 |
@@ -89,6 +125,10 @@
 | `--vex-base-url` | `https://github.com/yuanying/fleet-infra/blob/main/` | VEX のファイルへのリンクの前置き |
 | `--metrics-bind-address` | `:8080` | /metrics |
 | `--health-probe-bind-address` | `:8081` | /healthz・/readyz |
+| `--api-bind-address` | `:8082` | JSON の API（/api/findings）。`0` なら出さない |
+| `--github-app-id` | `0` | GitHub を読む GitHub App の ID。`0` なら `GITHUB_TOKEN` で読む |
+| `--github-app-installation-id` | `0` | App の持ち主へのインストールの ID。App ID を指定したら必須 |
+| `--github-app-private-key-file` | `/var/run/secrets/github-app/private-key.pem` | App の private key。App ID を指定したのに読めなければ起動しない |
 | `--leader-elect` | `false` | リーダー選出。レプリカ 1 では使わない |
 | `--responder-url` | （なし） | vuln-responder の A2A の URL。空なら依頼しない |
 | `--responder-token-file` | `/var/run/secrets/a2a/token` | audience `a2a` の projected token。送るたびに読み直す |
@@ -103,7 +143,8 @@
 
 | Secret（`config/` の Deployment が読む名前） | キー | 渡し方 | 中身と権限 | 無いとき |
 |---|---|---|---|---|
-| `vuln-tracker-github` | `token` | 環境変数 `GITHUB_TOKEN` | fine-grained PAT。対象リポジトリは fleet-infra と k8s-manifests-fraction、権限は Contents: Read と Pull requests: Read（Metadata: Read は自動）。GitHub App の installation token も使えるが 1 時間で切れる | private の fleet-infra が読めない（`in-git`・注釈・対応表・Renovate の PR が使えない）。public のリポジトリは匿名で読む |
+| `vuln-tracker-github-app` | `private-key.pem` | `/var/run/secrets/github-app/private-key.pem`（`--github-app-id` を指定したときだけ読む） | 専用の GitHub App の private key。App の権限は Contents・Pull requests・Metadata の Read-only だけ、インストール先は持ち主の All repositories、Webhook なし（[ADR 0013](docs/adr/0013-a-dedicated-github-app.md)）。installation token は失効の前に入れ替える | `GITHUB_TOKEN` で読む |
+| `vuln-tracker-github` | `token` | 環境変数 `GITHUB_TOKEN`（`--github-app-id` が `0` のときだけ使う） | 後方互換の fine-grained PAT。権限は Contents: Read と Pull requests: Read（Metadata: Read は自動） | private のリポジトリが読めない（`in-git`・注釈・対応表・PR が使えない）。public のリポジトリは匿名で読むが、匿名の rate limit（1 時間 60 回）ではソースのリポジトリの PR まで読みきれない |
 | `vuln-tracker-slack` | `webhook-url` | 環境変数 `SLACK_WEBHOOK_URL` | Slack の Incoming Webhook の URL | ダイジェストを送らない |
 | `vuln-tracker-registry` | `.dockerconfigjson`（型 `kubernetes.io/dockerconfigjson`） | `/etc/vuln-tracker/docker/config.json`（`DOCKER_CONFIG`） | pull だけのレジストリの資格。registry.fraction.jp、必要なら ghcr（`read:packages`）、Docker Hub（rate limit を上げるため） | 匿名で読む。registry.fraction.jp のイメージは `unscannable` |
 | `vuln-tracker-trivy` | `token` | 環境変数 `TRIVY_TOKEN` | Trivy server のトークン | 今の Trivy server はトークンを要しない |
@@ -152,8 +193,8 @@
 | ServiceAccount | `vuln-tracker` | |
 | ClusterRole / ClusterRoleBinding | `vuln-tracker` | VulnerabilityReport と Pod の get・list・watch |
 | Role / RoleBinding | `vuln-tracker` | ConfigMap の create と、`vuln-tracker-state` の get・update・patch |
-| Deployment | `vuln-tracker` | レプリカ 1、`Recreate`。作業領域は emptyDir（`sizeLimit: 2Gi`）。audience `a2a` の projected token を `/var/run/secrets/a2a/token` に置く |
-| Service | `vuln-tracker` | /metrics（ポート名 `metrics`） |
+| Deployment | `vuln-tracker` | レプリカ 1、`Recreate`。作業領域は emptyDir（`sizeLimit: 2Gi`）。audience `a2a` の projected token を `/var/run/secrets/a2a/token` に、Secret `vuln-tracker-github-app`（任意）を `/var/run/secrets/github-app/` に置く |
+| Service | `vuln-tracker` | /metrics（ポート名 `metrics`、8080）と JSON の API（ポート名 `api`、8082） |
 
 `config/prometheus/servicemonitor.yaml` は kube-prometheus 向けの ServiceMonitor の例で、既定の kustomization には含めない。状態の ConfigMap は集計役が作るので、マニフェストには含めない。
 

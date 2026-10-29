@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 )
 
@@ -21,12 +22,26 @@ import (
 // documents are far smaller; anything bigger is not one.
 const maxFileSize = 4 << 20
 
-// PullRequest is an open pull request, as far as the tracker cares.
+// States of a pull request, as the API answers them (ADR 0015).
+const (
+	StateOpen   = "open"
+	StateMerged = "merged"
+	StateClosed = "closed"
+)
+
+// PullRequest is a pull request, as far as the tracker cares.
 type PullRequest struct {
-	URL    string
-	Title  string
-	Body   string
-	Author string
+	URL string
+	// Repository is "owner/name".
+	Repository string
+	Number     int
+	// State is StateOpen, StateMerged or StateClosed (closed unmerged).
+	State   string
+	Title   string
+	Body    string
+	Author  string
+	HeadRef string
+	HeadSHA string
 }
 
 // Repositories is what the tracker reads from GitHub.
@@ -38,6 +53,10 @@ type Repositories interface {
 	Files(ctx context.Context, repo, sha string) (map[string][]byte, error)
 	// OpenPullRequests lists a repository's open pull requests.
 	OpenPullRequests(ctx context.Context, repo string) ([]PullRequest, error)
+	// PullRequest reads one pull request, open or not.
+	PullRequest(ctx context.Context, repo string, number int) (PullRequest, error)
+	// PullRequestFiles lists the paths a pull request changes.
+	PullRequestFiles(ctx context.Context, repo string, number int) ([]string, error)
 }
 
 // Client talks to the GitHub REST API. Token, if set, needs only read access
@@ -143,33 +162,105 @@ func (c *Client) Files(ctx context.Context, repo, sha string) (map[string][]byte
 }
 
 type pullJSON struct {
-	HTMLURL string  `json:"html_url"`
-	Title   string  `json:"title"`
-	Body    *string `json:"body"`
-	User    struct {
+	HTMLURL  string  `json:"html_url"`
+	Number   int     `json:"number"`
+	State    string  `json:"state"`
+	MergedAt *string `json:"merged_at"`
+	Title    string  `json:"title"`
+	Body     *string `json:"body"`
+	User     struct {
 		Login string `json:"login"`
 	} `json:"user"`
+	Head struct {
+		Ref string `json:"ref"`
+		SHA string `json:"sha"`
+	} `json:"head"`
+}
+
+func (p pullJSON) pullRequest(repo string) PullRequest {
+	pr := PullRequest{
+		URL: p.HTMLURL, Repository: repo, Number: p.Number, State: StateOpen,
+		Title: p.Title, Author: p.User.Login, HeadRef: p.Head.Ref, HeadSHA: p.Head.SHA,
+	}
+	switch {
+	case p.MergedAt != nil && *p.MergedAt != "":
+		pr.State = StateMerged
+	case p.State == "closed":
+		pr.State = StateClosed
+	}
+	if p.Body != nil {
+		pr.Body = *p.Body
+	}
+	return pr
+}
+
+func (c *Client) getJSON(ctx context.Context, p string, v any) error {
+	resp, err := c.get(ctx, p, "application/vnd.github+json")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(v); err != nil {
+		return fmt.Errorf("reading %s: %w", p, err)
+	}
+	return nil
 }
 
 // OpenPullRequests implements Repositories. One page of 100 is read; a
 // repository with more open pull requests than that has bigger problems.
 func (c *Client) OpenPullRequests(ctx context.Context, repo string) ([]PullRequest, error) {
-	resp, err := c.get(ctx, "/repos/"+repo+"/pulls?state=open&per_page=100", "application/vnd.github+json")
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
 	var raw []pullJSON
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(&raw); err != nil {
-		return nil, fmt.Errorf("reading the pull requests of %s: %w", repo, err)
+	if err := c.getJSON(ctx, "/repos/"+repo+"/pulls?state=open&per_page=100", &raw); err != nil {
+		return nil, err
 	}
 	prs := make([]PullRequest, 0, len(raw))
 	for _, p := range raw {
-		pr := PullRequest{URL: p.HTMLURL, Title: p.Title, Author: p.User.Login}
-		if p.Body != nil {
-			pr.Body = *p.Body
-		}
-		prs = append(prs, pr)
+		prs = append(prs, p.pullRequest(repo))
 	}
 	return prs, nil
+}
+
+// PullRequest implements Repositories.
+func (c *Client) PullRequest(ctx context.Context, repo string, number int) (PullRequest, error) {
+	var raw pullJSON
+	if err := c.getJSON(ctx, "/repos/"+repo+"/pulls/"+strconv.Itoa(number), &raw); err != nil {
+		return PullRequest{}, err
+	}
+	return raw.pullRequest(repo), nil
+}
+
+// PullRequestFiles implements Repositories. One page of 100 is read: enough
+// to tell a pull request that changes only VEX documents from one that does
+// more.
+func (c *Client) PullRequestFiles(ctx context.Context, repo string, number int) ([]string, error) {
+	var raw []struct {
+		Filename string `json:"filename"`
+	}
+	if err := c.getJSON(ctx, "/repos/"+repo+"/pulls/"+strconv.Itoa(number)+"/files?per_page=100", &raw); err != nil {
+		return nil, err
+	}
+	files := make([]string, 0, len(raw))
+	for _, f := range raw {
+		files = append(files, f.Filename)
+	}
+	return files, nil
+}
+
+// ParsePullRequestURL reads the repository and number from a pull request's
+// URL on github.com.
+func ParsePullRequestURL(u string) (string, int, bool) {
+	rest, ok := strings.CutPrefix(u, "https://github.com/")
+	if !ok {
+		return "", 0, false
+	}
+	rest, _, _ = strings.Cut(rest, "#")
+	parts := strings.Split(rest, "/")
+	if len(parts) < 4 || parts[0] == "" || parts[1] == "" || parts[2] != "pull" {
+		return "", 0, false
+	}
+	n, err := strconv.Atoi(parts[3])
+	if err != nil || n <= 0 {
+		return "", 0, false
+	}
+	return parts[0] + "/" + parts[1], n, true
 }

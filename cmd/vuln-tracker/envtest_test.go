@@ -3,8 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -73,6 +76,14 @@ func (fakeRepos) Files(context.Context, string, string) (map[string][]byte, erro
 }
 
 func (fakeRepos) OpenPullRequests(context.Context, string) ([]github.PullRequest, error) {
+	return nil, nil
+}
+
+func (fakeRepos) PullRequest(context.Context, string, int) (github.PullRequest, error) {
+	return github.PullRequest{}, errors.New("no pull requests here")
+}
+
+func (fakeRepos) PullRequestFiles(context.Context, string, int) ([]string, error) {
 	return nil, nil
 }
 
@@ -194,7 +205,7 @@ func TestAgainstAnAPIServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tr := newTracker(mgr, cfg)
+	tr := newTracker(mgr, cfg, &github.Client{})
 	tr.Discoverer.Registry = fakeRegistry{}
 	tr.Discoverer.RenovateAuthor = regexp.MustCompile("renovate")
 	tr.Scanner = fakeScanner{}
@@ -207,6 +218,15 @@ func TestAgainstAnAPIServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := mgr.Add(tr); err != nil {
+		t.Fatal(err)
+	}
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiSrv := apiServer(cfg, tr)
+	apiSrv.Listener = lis
+	if err := mgr.Add(apiSrv); err != nil {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
@@ -236,6 +256,30 @@ vuln_tracker_findings{digest="` + dRun + `",fixable="true",image="ghcr.io/yuanyi
 			t.Fatalf("the finding never reached fixed-in-main: %v\nsnapshot: %+v", err, snap)
 		}
 		time.Sleep(200 * time.Millisecond)
+	}
+
+	// The JSON API serves the same finding, with both of its sides
+	// (ADR 0015).
+	resp, err := http.Get("http://" + lis.Addr().String() + "/api/findings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body struct {
+		Findings []struct {
+			Image    string                 `json:"image"`
+			Stage    string                 `json:"stage"`
+			Source   struct{ State string } `json:"source"`
+			Manifest struct{ State string } `json:"manifest"`
+		} `json:"findings"`
+	}
+	err = json.NewDecoder(resp.Body).Decode(&body)
+	resp.Body.Close()
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/findings: %d %v", resp.StatusCode, err)
+	}
+	if len(body.Findings) != 1 || body.Findings[0].Image != image || body.Findings[0].Stage != "fixed-in-main" ||
+		body.Findings[0].Source.State != "merged" || body.Findings[0].Manifest.State != "no-fix" {
+		t.Errorf("GET /api/findings: %+v", body)
 	}
 
 	// The state went to its ConfigMap, through the narrow Role.

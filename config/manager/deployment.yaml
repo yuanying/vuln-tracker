@@ -48,7 +48,9 @@ spec:
             - name: HOME
               value: /work/home
             # All three are optional: without a token fleet-infra cannot be
-            # read, without a webhook no digest is sent (ADR 0007).
+            # read, without a webhook no digest is sent (ADR 0007). The
+            # GitHub token is read only when no --github-app-id is given
+            # (ADR 0013).
             - name: GITHUB_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -73,6 +75,10 @@ spec:
               protocol: TCP
             - name: probes
               containerPort: 8081
+              protocol: TCP
+            # The JSON API (ADR 0015), for gated's Ingress.
+            - name: api
+              containerPort: 8082
               protocol: TCP
           livenessProbe:
             httpGet:
@@ -105,6 +111,9 @@ spec:
             - name: a2a-token
               mountPath: /var/run/secrets/a2a
               readOnly: true
+            - name: github-app
+              mountPath: /var/run/secrets/github-app
+              readOnly: true
       volumes:
         # trivy's temporary files and its Java DB (ADR 0003).
         - name: work
@@ -130,3 +139,13 @@ spec:
                   audience: a2a
                   expirationSeconds: 3600
                   path: token
+        # The private key of the GitHub App that reads GitHub (ADR 0013).
+        # Read only when --github-app-id is set; optional, so the
+        # Deployment starts on $GITHUB_TOKEN before the App exists.
+        - name: github-app
+          secret:
+            secretName: vuln-tracker-github-app
+            optional: true
+            items:
+              - key: private-key.pem
+                path: private-key.pem

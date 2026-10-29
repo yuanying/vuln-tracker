@@ -130,6 +130,27 @@ func TestDiscoverSkipsMainAtTheRelease(t *testing.T) {
 	}
 }
 
+// git usually names the very release or upstream version a bump went to.
+// Both candidates stay, so the finding can reach in-git; the digest is
+// scanned once all the same (ADR 0002).
+func TestDiscoverKeepsGitAtTheSameDigest(t *testing.T) {
+	const name = "ghcr.io/yuanying/hshelf"
+	reg := &fakeRegistry{
+		tags:    map[string][]string{name: {"1.0.0", "1.1.0"}},
+		digests: map[string]string{name + ":1.1.0": dRelease},
+		labels: map[string]map[string]string{
+			name + "@" + dRun:     labels("https://github.com/yuanying/hshelf", "aaa"),
+			name + "@" + dRelease: labels("https://github.com/yuanying/hshelf", "bbb"),
+		},
+	}
+	at := now
+	ix := manifests.Index{name: {{Registry: "ghcr.io", Repository: "yuanying/hshelf", Tag: "1.1.0"}}}
+	c := newDiscoverer(reg, &at).Discover(context.Background(), hshelf(), World{Manifests: ix})
+	if got := kinds(c); !slices.Equal(got, []string{"release:1.1.0@sha256:3", "git:1.1.0@sha256:3"}) {
+		t.Errorf("candidates %v", got)
+	}
+}
+
 func TestDiscoverExternal(t *testing.T) {
 	const name = "index.docker.io/library/nginx"
 	img := Image{Ref: imageref.Ref{Registry: "index.docker.io", Repository: "library/nginx", Tag: "1.30.5-alpine", Digest: dRun}}

@@ -109,6 +109,15 @@ count by (image) (
 | 候補の様子 | `vuln_tracker_candidate_info` |
 | vuln-responder への依頼 | `vuln_tracker_responder_request_info`。`state` で失敗（`failed`・`rejected`・`error`・`timeout`）を拾える |
 
+### 追記（2026-10-29、ADR 0014）
+
+`vuln_tracker_sync_timestamp_seconds` と `vuln_tracker_sync_errors_total` の `target` に `pull-requests` を加える。
+自作のイメージのソースのリポジトリの PR、vuln-responder の返事の PR、マニフェストの PR のファイルの読みである（ADR 0014）。
+エラーは読めなかった回数、時刻は 1 回の同期ですべて読めたときに進む。
+
+発見ごとの 2 軸（ソース側・マニフェスト側）と結び付いた PR はメトリクスに出さない。JSON の API（ADR 0015）で読む。
+既存の系列とラベル（`stage` を含む）は変えない。
+
 ## Consequences
 
 - 発見ごとの系列は Critical と High だけなので、Medium 以下の個々の脆弱性はダッシュボードで
@@ -129,3 +138,5 @@ count by (image) (
 - [[0004-applying-openvex-annotations]]
 - [[0006-weekly-digest-and-durable-state]]
 - [[0009-requesting-triage-from-vuln-responder]]
+- [[0014-two-axes-of-remediation-and-linked-pull-requests]]
+- [[0015-json-api-contract]]

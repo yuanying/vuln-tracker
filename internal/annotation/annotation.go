@@ -17,8 +17,11 @@ import (
 	"github.com/openvex/go-vex/pkg/vex"
 )
 
+// Dir is where fleet-infra keeps the VEX documents.
+const Dir = "security/vex/"
+
 const (
-	dir    = "security/vex/"
+	dir    = Dir
 	suffix = ".openvex.json"
 )
 

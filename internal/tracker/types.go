@@ -5,10 +5,14 @@
 package tracker
 
 import (
+	"regexp"
 	"time"
 
 	"github.com/yuanying/vuln-tracker/internal/annotation"
+	"github.com/yuanying/vuln-tracker/internal/github"
 	"github.com/yuanying/vuln-tracker/internal/imageref"
+	"github.com/yuanying/vuln-tracker/internal/manifests"
+	"github.com/yuanying/vuln-tracker/internal/pipeline"
 	"github.com/yuanying/vuln-tracker/internal/scanner"
 	"github.com/yuanying/vuln-tracker/internal/stage"
 )
@@ -95,6 +99,25 @@ type Finding struct {
 	// FirstSeen is when the image × vulnerability pair was first seen, in
 	// unix seconds (ADR 0005).
 	FirstSeen int64
+	// Pipeline is where the fix stands on its two axes (ADR 0014).
+	Pipeline Pipeline
+}
+
+// Pipeline is a finding's two axes and the pull requests linked to them
+// (ADR 0014).
+type Pipeline struct {
+	// SourceRepository is "owner/name" of a self-built image's source, or "".
+	SourceRepository string
+	Source           pipeline.SourceState
+	SourcePRs        []pipeline.PR
+	// ManifestRepository is the first manifest repository that names the
+	// image, or "".
+	ManifestRepository string
+	Manifest           pipeline.ManifestState
+	ManifestPRs        []pipeline.PR
+	// VEXPRs are pull requests to the manifest repositories that change
+	// only VEX documents.
+	VEXPRs []pipeline.PR
 }
 
 // Key identifies a finding across evaluations.
@@ -134,6 +157,29 @@ type Snapshot struct {
 	At       time.Time
 	Findings []Finding
 	Images   []ImageView
+	// Synced says the repositories and the registries had been read once
+	// before this evaluation, so its findings are not all pending.
+	Synced bool
+}
+
+// RepoIndex is the image versions one manifest repository names.
+type RepoIndex struct {
+	Name  string
+	Index manifests.Index
+}
+
+// PullRequests are what the two axes link to findings (ADR 0014).
+type PullRequests struct {
+	// Open are the open pull requests of the manifest and source
+	// repositories, by repository.
+	Open map[string][]github.PullRequest
+	// Replies are the pull requests vuln-responder's replies named, by URL,
+	// as last read.
+	Replies map[string]github.PullRequest
+	// VEXOnly are the pull requests, by URL, that change only VEX documents.
+	VEXOnly map[string]bool
+	// Renovate matches the login of Renovate's pull requests.
+	Renovate *regexp.Regexp
 }
 
 // firstSeenKey is the image × vulnerability pair "new" is measured on. Tags,
