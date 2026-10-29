@@ -2,11 +2,15 @@ package tracker
 
 import (
 	"errors"
+	"regexp"
 	"testing"
 	"time"
 
 	"github.com/yuanying/vuln-tracker/internal/annotation"
+	"github.com/yuanying/vuln-tracker/internal/github"
 	"github.com/yuanying/vuln-tracker/internal/imageref"
+	"github.com/yuanying/vuln-tracker/internal/manifests"
+	"github.com/yuanying/vuln-tracker/internal/pipeline"
 	"github.com/yuanying/vuln-tracker/internal/scanner"
 	"github.com/yuanying/vuln-tracker/internal/stage"
 	"github.com/yuanying/vuln-tracker/internal/state"
@@ -184,5 +188,89 @@ func TestEvaluateDeduplicates(t *testing.T) {
 	snap := Evaluate(Input{Images: []Image{img}, Scans: map[string]ScanResult{}, State: state.New(), Now: now, Today: "2026-10-27"})
 	if len(snap.Findings) != 2 {
 		t.Errorf("got %d findings, want 2", len(snap.Findings))
+	}
+}
+
+// The two axes are read from the same scans as the stage, with the pull
+// requests linked to each finding (ADR 0014).
+func TestEvaluatePipeline(t *testing.T) {
+	const (
+		src   = "yuanying/hshelf"
+		fleet = "yuanying/fleet-infra"
+	)
+	img := hshelf()
+	cands := map[string]Candidates{
+		img.Key(): {
+			Origin: stage.SelfBuilt,
+			Source: "https://github.com/yuanying/hshelf",
+			List: []CandidateRef{
+				{Kind: stage.Main, Tag: "main", Digest: dMain},
+				{Kind: stage.Release, Tag: "1.1.0", Digest: dRelease},
+				{Kind: stage.Git, Tag: "1.0.1", Digest: dGit},
+			},
+		},
+	}
+	json := scanner.Key{VulnerabilityID: "CVE-2026-33210", Package: "json"}
+	libssl := scanner.Key{VulnerabilityID: "CVE-2026-0001", Package: "libssl3"}
+	busybox := scanner.Key{VulnerabilityID: "CVE-2026-0002", Package: "busybox"}
+	scans := map[string]ScanResult{
+		// main fixed json; the release fixed libssl3; git fixed busybox.
+		dMain:    {At: now, Set: set(libssl, busybox)},
+		dRelease: {At: now, Set: set(json, busybox)},
+		dGit:     {At: now, Set: set(json, libssl)},
+	}
+	reply := github.PullRequest{URL: "https://github.com/yuanying/hshelf/pull/5", Repository: src, Number: 5, State: github.StateMerged, Author: "fraction-vuln-responder[bot]"}
+	vexPR := github.PullRequest{URL: "https://github.com/yuanying/fleet-infra/pull/7", Repository: fleet, Number: 7, State: github.StateOpen, Title: "VEX for CVE-2026-0001"}
+	bump := github.PullRequest{URL: "https://github.com/yuanying/fleet-infra/pull/8", Repository: fleet, Number: 8, State: github.StateOpen, Author: "renovate[bot]", Title: "Update ghcr.io/yuanying/hshelf Docker tag to v1.1.0"}
+	st := state.New()
+	st.Requests["source:yuanying/hshelf"] = state.Request{
+		TargetType: "source", Target: src, PR: reply.URL,
+		Asked: []string{"ghcr.io/yuanying/hshelf|CVE-2026-33210|json"},
+	}
+	idx := manifests.Index{"ghcr.io/yuanying/hshelf": {{Registry: "ghcr.io", Repository: "yuanying/hshelf", Tag: "1.0.1", Digest: dGit}}}
+	snap := Evaluate(Input{
+		Images: []Image{img}, Candidates: cands, Scans: scans, State: st, Now: now, Today: "2026-10-27",
+		ManifestRepos: []RepoIndex{{Name: "yuanying/k8s-manifests-fraction", Index: manifests.Index{}}, {Name: fleet, Index: idx}},
+		PullRequests: PullRequests{
+			Open:     map[string][]github.PullRequest{fleet: {vexPR, bump}},
+			Replies:  map[string]github.PullRequest{reply.URL: reply},
+			VEXOnly:  map[string]bool{vexPR.URL: true},
+			Renovate: regexp.MustCompile("renovate"),
+		},
+	})
+
+	j := find(t, snap, "CVE-2026-33210").Pipeline
+	if j.SourceRepository != src || j.Source != pipeline.SourceMerged || j.Manifest != pipeline.ManifestNoFix || j.ManifestRepository != fleet {
+		t.Errorf("json: %+v", j)
+	}
+	if len(j.SourcePRs) != 1 || j.SourcePRs[0].URL != reply.URL || j.SourcePRs[0].Link != pipeline.LinkResponder {
+		t.Errorf("json source PRs: %+v", j.SourcePRs)
+	}
+	// Renovate's bump names the image, so it is linked to every finding of
+	// it, fixed by the bump or not.
+	if len(j.ManifestPRs) != 1 || j.ManifestPRs[0].URL != bump.URL {
+		t.Errorf("json manifest PRs: %+v", j.ManifestPRs)
+	}
+
+	l := find(t, snap, "CVE-2026-0001").Pipeline
+	if l.Source != pipeline.SourceReleased || l.Manifest != pipeline.ManifestPROpen {
+		t.Errorf("libssl3: %+v", l)
+	}
+	if len(l.VEXPRs) != 1 || l.VEXPRs[0].URL != vexPR.URL || l.VEXPRs[0].Link != pipeline.LinkMentionsID {
+		t.Errorf("libssl3 VEX PRs: %+v", l.VEXPRs)
+	}
+
+	b := find(t, snap, "CVE-2026-0002").Pipeline
+	if b.Source != pipeline.SourceUnaddressed || b.Manifest != pipeline.ManifestMerged {
+		t.Errorf("busybox: %+v", b)
+	}
+}
+
+// Before discovery reaches an image nothing is known about either side.
+func TestEvaluatePipelineUndiscovered(t *testing.T) {
+	snap := Evaluate(Input{Images: []Image{hshelf()}, State: state.New(), Now: now, Today: "2026-10-27"})
+	p := find(t, snap, "CVE-2026-33210").Pipeline
+	if p.Source != pipeline.SourceUnknown || p.Manifest != pipeline.ManifestUnknown || p.SourceRepository != "" || p.ManifestRepository != "" {
+		t.Errorf("got %+v", p)
 	}
 }

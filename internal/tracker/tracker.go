@@ -3,6 +3,9 @@ package tracker
 import (
 	"context"
 	"errors"
+	"maps"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -18,6 +21,7 @@ import (
 	"github.com/yuanying/vuln-tracker/internal/responder"
 	"github.com/yuanying/vuln-tracker/internal/scanner"
 	"github.com/yuanying/vuln-tracker/internal/sources"
+	"github.com/yuanying/vuln-tracker/internal/stage"
 	"github.com/yuanying/vuln-tracker/internal/state"
 )
 
@@ -117,6 +121,14 @@ type Tracker struct {
 	vex         *annotation.Set
 	heads       map[string]string
 	files       map[string]map[string][]byte
+	repoIndexes []RepoIndex
+	// The pull requests linked by the two axes (ADR 0014): open ones by
+	// repository, vuln-responder's replies by URL, and what the files of
+	// manifest pull requests said, by URL.
+	openPRs     map[string][]github.PullRequest
+	replies     map[string]github.PullRequest
+	prFiles     map[string]prFiles
+	synced      bool
 	lastGit     time.Time
 	snapshot    Snapshot
 	hasSnapshot bool
@@ -140,6 +152,9 @@ func (t *Tracker) init() {
 		t.scans = map[string]ScanResult{}
 		t.heads = map[string]string{}
 		t.files = map[string]map[string][]byte{}
+		t.openPRs = map[string][]github.PullRequest{}
+		t.replies = map[string]github.PullRequest{}
+		t.prFiles = map[string]prFiles{}
 	}
 	if t.trigger == nil {
 		t.trigger = make(chan struct{}, 1)
@@ -204,14 +219,25 @@ func (t *Tracker) EvaluateOnce(ctx context.Context) {
 	t.mu.Lock()
 	t.init()
 	t.images = t.inventory.Build(reports, RunningDigests(pods))
+	vexOnly := map[string]bool{}
+	for u, f := range t.prFiles {
+		vexOnly[u] = f.vexOnly
+	}
+	var renovate *regexp.Regexp
+	if t.Discoverer != nil {
+		renovate = t.Discoverer.RenovateAuthor
+	}
 	t.snapshot = Evaluate(Input{
-		Images:     t.images,
-		Candidates: t.candidates,
-		Scans:      t.scans,
-		VEX:        t.vex,
-		State:      t.state,
-		Now:        now,
-		Today:      t.today(now),
+		Images:        t.images,
+		Candidates:    t.candidates,
+		Scans:         t.scans,
+		VEX:           t.vex,
+		State:         t.state,
+		Now:           now,
+		Today:         t.today(now),
+		ManifestRepos: t.repoIndexes,
+		PullRequests:  PullRequests{Open: t.openPRs, Replies: t.replies, VEXOnly: vexOnly, Renovate: renovate},
+		Synced:        t.synced,
 	})
 	t.hasSnapshot = true
 	t.stateDirty = true
@@ -291,8 +317,13 @@ func (t *Tracker) SyncOnce(ctx context.Context) {
 		}
 	}
 
+	if gitDue {
+		t.syncPullRequests(ctx, images, cands)
+	}
+
 	t.mu.Lock()
 	t.candidates = cands
+	t.synced = true
 	wanted := map[string]bool{}
 	for _, c := range cands {
 		for _, r := range c.List {
@@ -314,7 +345,6 @@ func (t *Tracker) syncGit(ctx context.Context) World {
 	if !containsRepo(repos, t.FleetInfra) && t.FleetInfra.Name != "" {
 		repos = append(repos, t.FleetInfra)
 	}
-	var prs []github.PullRequest
 	for _, r := range repos {
 		target := targetName(r.Name)
 		sha, err := t.GitHub.Head(ctx, r.Name, r.Branch)
@@ -334,8 +364,11 @@ func (t *Tracker) syncGit(ctx context.Context) World {
 		}
 		if err == nil {
 			var p []github.PullRequest
-			p, err = t.GitHub.OpenPullRequests(ctx, r.Name)
-			prs = append(prs, p...)
+			if p, err = t.GitHub.OpenPullRequests(ctx, r.Name); err == nil {
+				t.mu.Lock()
+				t.openPRs[r.Name] = p
+				t.mu.Unlock()
+			}
 		}
 		if err != nil {
 			t.Log.Error(err, "reading a repository", "repository", r.Name)
@@ -352,8 +385,16 @@ func (t *Tracker) syncGit(ctx context.Context) World {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	var idx []manifests.Index
+	t.repoIndexes = nil
+	var prs []github.PullRequest
+	for _, r := range repos {
+		// A repository that could not be read keeps its last list.
+		prs = append(prs, t.openPRs[r.Name]...)
+	}
 	for _, r := range t.Manifests {
-		idx = append(idx, manifests.Build(t.files[r.Name]))
+		ix := manifests.Build(t.files[r.Name])
+		idx = append(idx, ix)
+		t.repoIndexes = append(t.repoIndexes, RepoIndex{Name: r.Name, Index: ix})
 	}
 	w := World{Manifests: manifests.Merge(idx...), PullRequests: prs, Sources: t.world.Sources}
 	fleet := t.files[t.FleetInfra.Name]
@@ -378,6 +419,167 @@ func (t *Tracker) syncGit(ctx context.Context) World {
 	t.world = w
 	return w
 }
+
+// prFiles is what the files of a pull request said at one head.
+type prFiles struct {
+	head    string
+	vexOnly bool
+}
+
+// vexOnly says whether a pull request changes only VEX documents.
+func vexOnly(files []string) bool {
+	if len(files) == 0 {
+		return false
+	}
+	for _, f := range files {
+		if !strings.HasPrefix(f, annotation.Dir) {
+			return false
+		}
+	}
+	return true
+}
+
+// syncPullRequests reads what the two axes link (ADR 0014): the open pull
+// requests of every self-built image's source repository, the state of every
+// pull request vuln-responder replied with, and the files of the manifest
+// repositories' pull requests that may only annotate. A read that fails
+// keeps what was read before.
+func (t *Tracker) syncPullRequests(ctx context.Context, images []Image, cands map[string]Candidates) {
+	sources := map[string]bool{}
+	for _, img := range images {
+		c, ok := cands[img.Key()]
+		if !ok || c.Origin != stage.SelfBuilt {
+			continue
+		}
+		if repo, ok := sourceRepository(c.Source); ok {
+			sources[repo] = true
+		}
+	}
+	manifestRepos := map[string]bool{t.FleetInfra.Name: true}
+	for _, r := range t.Manifests {
+		manifestRepos[r.Name] = true
+	}
+	failed := 0
+	for _, repo := range slices.Sorted(maps.Keys(sources)) {
+		if manifestRepos[repo] {
+			continue // read with the manifests
+		}
+		prs, err := t.GitHub.OpenPullRequests(ctx, repo)
+		if err != nil {
+			t.Log.Error(err, "reading the pull requests of a source repository", "repository", repo)
+			failed++
+			continue
+		}
+		t.mu.Lock()
+		t.openPRs[repo] = prs
+		t.mu.Unlock()
+	}
+
+	t.mu.Lock()
+	for repo := range t.openPRs {
+		if !sources[repo] && !manifestRepos[repo] {
+			delete(t.openPRs, repo)
+		}
+	}
+	wantReplies := map[string]bool{}
+	if t.state != nil {
+		for _, rec := range t.state.Requests {
+			if rec.PR != "" {
+				wantReplies[rec.PR] = true
+			}
+		}
+	}
+	for u := range t.replies {
+		if !wantReplies[u] {
+			delete(t.replies, u)
+		}
+	}
+	var toRead []string
+	for u := range wantReplies {
+		// A merged pull request stays merged.
+		if t.replies[u].State != github.StateMerged {
+			toRead = append(toRead, u)
+		}
+	}
+	t.mu.Unlock()
+
+	sort.Strings(toRead)
+	for _, u := range toRead {
+		repo, n, ok := github.ParsePullRequestURL(u)
+		if !ok {
+			continue
+		}
+		pr, err := t.GitHub.PullRequest(ctx, repo, n)
+		if err != nil {
+			t.Log.Error(err, "reading a pull request vuln-responder replied with", "url", u)
+			failed++
+			continue
+		}
+		t.mu.Lock()
+		t.replies[u] = pr
+		t.mu.Unlock()
+	}
+
+	// Only the pull requests that may annotate are looked into: those in a
+	// manifest repository that Renovate did not open.
+	t.mu.Lock()
+	var renovate *regexp.Regexp
+	if t.Discoverer != nil {
+		renovate = t.Discoverer.RenovateAuthor
+	}
+	candidates := map[string]github.PullRequest{}
+	for repo, prs := range t.openPRs {
+		if !manifestRepos[repo] {
+			continue
+		}
+		for _, p := range prs {
+			if renovate == nil || !renovate.MatchString(p.Author) {
+				candidates[p.URL] = p
+			}
+		}
+	}
+	for u, p := range t.replies {
+		if manifestRepos[p.Repository] {
+			candidates[u] = p
+		}
+	}
+	for u := range t.prFiles {
+		if _, ok := candidates[u]; !ok {
+			delete(t.prFiles, u)
+		}
+	}
+	var look []github.PullRequest
+	for _, u := range slices.Sorted(maps.Keys(candidates)) {
+		p := candidates[u]
+		if f, ok := t.prFiles[u]; !ok || f.head != p.HeadSHA {
+			look = append(look, p)
+		}
+	}
+	t.mu.Unlock()
+
+	for _, p := range look {
+		files, err := t.GitHub.PullRequestFiles(ctx, p.Repository, p.Number)
+		if err != nil {
+			t.Log.Error(err, "reading the files of a pull request", "url", p.URL)
+			failed++
+			continue
+		}
+		t.mu.Lock()
+		t.prFiles[p.URL] = prFiles{head: p.HeadSHA, vexOnly: vexOnly(files)}
+		t.mu.Unlock()
+	}
+	if t.Metrics != nil {
+		if failed > 0 {
+			t.Metrics.SyncErrors.WithLabelValues(syncTargetPullRequests).Add(float64(failed))
+		} else {
+			t.Metrics.SyncTimestamp.WithLabelValues(syncTargetPullRequests).SetToCurrentTime()
+		}
+	}
+}
+
+// syncTargetPullRequests is the `target` label of the source repositories'
+// and vuln-responder's pull requests (ADR 0005).
+const syncTargetPullRequests = "pull-requests"
 
 func containsRepo(rs []Repo, r Repo) bool {
 	for _, x := range rs {

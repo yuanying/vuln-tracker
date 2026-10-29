@@ -17,6 +17,7 @@ import (
 	"github.com/yuanying/vuln-tracker/internal/digest"
 	"github.com/yuanying/vuln-tracker/internal/github"
 	"github.com/yuanying/vuln-tracker/internal/imageref"
+	"github.com/yuanying/vuln-tracker/internal/pipeline"
 	"github.com/yuanying/vuln-tracker/internal/scanner"
 	"github.com/yuanying/vuln-tracker/internal/stage"
 	"github.com/yuanying/vuln-tracker/internal/state"
@@ -264,5 +265,125 @@ func TestTrackerPass(t *testing.T) {
 	}
 	if tr2.state.Digest.SentAt != clock.Unix() {
 		t.Error("the restarted tracker forgot the last digest")
+	}
+}
+
+// The tracker reads the source repository's open pull requests, the state of
+// vuln-responder's reply and the files of the manifest repository's pull
+// requests, and links them (ADR 0014).
+func TestTrackerPipeline(t *testing.T) {
+	const (
+		name  = "ghcr.io/yuanying/hshelf"
+		src   = "yuanying/hshelf"
+		fleet = "yuanying/fleet-infra"
+	)
+	reg := &fakeRegistry{
+		tags:    map[string][]string{name: {"1.0.0", "main"}},
+		digests: map[string]string{name + ":main": dMain},
+		labels:  map[string]map[string]string{name + "@" + dRun: labels("https://github.com/yuanying/hshelf", "aaa")},
+	}
+	source := &fakeSource{
+		reports: []Report{{
+			Image:    imageref.Ref{Registry: "ghcr.io", Repository: "yuanying/hshelf", Tag: "1.0.0", Digest: dRun},
+			Workload: Workload{Namespace: "aphrael", Kind: "ReplicaSet", Name: "aphrael-1", Container: "aphrael"},
+			Vulns:    []Vuln{{ID: "CVE-1", Package: "json", Severity: "CRITICAL", FixedVersion: "2.19.2"}},
+		}},
+		pods: []corev1.Pod{pod("aphrael", "p", name+"@"+dRun)},
+	}
+	// :main still has it.
+	sc := &fakeScanner{results: map[string]scanner.Set{dMain: set(scanner.Key{VulnerabilityID: "CVE-1", Package: "json"})}}
+	fix := github.PullRequest{URL: prURL(src, 3), Repository: src, Number: 3, State: github.StateOpen, Author: "yuanying", Title: "Fix CVE-1", HeadSHA: "a"}
+	vex := github.PullRequest{URL: prURL(fleet, 9), Repository: fleet, Number: 9, State: github.StateOpen, Author: "fraction-vuln-responder[bot]", Title: "Annotate", HeadSHA: "b"}
+	repos := &fakeRepos{
+		files: map[string]map[string][]byte{fleet: {}},
+		prs:   map[string][]github.PullRequest{src: {fix}, fleet: {vex}},
+		pulls: map[string]github.PullRequest{vex.URL: vex},
+		prFiles: map[string][]string{
+			vex.URL: {"security/vex/ghcr.io/yuanying/hshelf.openvex.json"},
+		},
+	}
+	store := &memStore{saved: state.New()}
+	store.saved.Initialized = true
+	store.saved.Requests["image:x"] = state.Request{TargetType: "source", Target: src, PR: vex.URL, Asked: []string{name + "|CVE-1|json"}}
+	clock := now
+	tr := &Tracker{
+		Source:     source,
+		Store:      store,
+		Discoverer: &Discoverer{Registry: reg, SelfSourcePrefix: "https://github.com/yuanying/", RenovateAuthor: regexp.MustCompile("renovate"), Now: func() time.Time { return clock }},
+		Scanner:    sc,
+		GitHub:     repos,
+		Metrics:    NewMetrics(prometheus.NewRegistry()),
+		Log:        logr.Discard(),
+		Now:        func() time.Time { return clock },
+		Config: Config{
+			FleetInfra:       Repo{Name: fleet, Branch: "main"},
+			Manifests:        []Repo{{Name: fleet, Branch: "main"}},
+			DetailSeverities: map[string]bool{"CRITICAL": true},
+			GitInterval:      10 * time.Minute,
+		},
+	}
+	ctx := context.Background()
+	if err := tr.LoadState(ctx); err != nil {
+		t.Fatal(err)
+	}
+	tr.EvaluateOnce(ctx)
+	if snap, _ := tr.Snapshot(); snap.Synced {
+		t.Error("synced before the first sync")
+	}
+
+	tr.SyncOnce(ctx)
+	tr.ScanOnce(ctx)
+	tr.EvaluateOnce(ctx)
+	snap, _ := tr.Snapshot()
+	if !snap.Synced {
+		t.Error("not synced after the first sync")
+	}
+	p := snap.Findings[0].Pipeline
+	if p.Source != pipeline.SourcePROpen || p.SourceRepository != src || len(p.SourcePRs) != 1 || p.SourcePRs[0].URL != fix.URL {
+		t.Errorf("source: %+v", p)
+	}
+	if p.Manifest != pipeline.ManifestNoFix || len(p.ManifestPRs) != 0 || len(p.VEXPRs) != 1 || p.VEXPRs[0].Link != pipeline.LinkResponder {
+		t.Errorf("manifest: %+v", p)
+	}
+
+	// Within the git interval nothing is read again.
+	clock = clock.Add(time.Minute)
+	tr.SyncOnce(ctx)
+	if n := repos.called("open " + src); n != 1 {
+		t.Errorf("source pull requests read %d times, want 1", n)
+	}
+
+	// After it, the open pull requests and the open reply are read again;
+	// the files of a head already read are not.
+	clock = clock.Add(10 * time.Minute)
+	tr.SyncOnce(ctx)
+	if n := repos.called("open " + src); n != 2 {
+		t.Errorf("source pull requests read %d times, want 2", n)
+	}
+	if n := repos.called("pull " + vex.URL); n != 2 {
+		t.Errorf("the reply read %d times, want 2", n)
+	}
+	if n := repos.called("files " + vex.URL); n != 1 {
+		t.Errorf("the files read %d times, want 1", n)
+	}
+
+	// A merged reply is final, and the pull request it replaced gone.
+	merged := vex
+	merged.State = github.StateMerged
+	repos.mu.Lock()
+	repos.pulls[vex.URL] = merged
+	repos.prs[fleet] = nil
+	repos.mu.Unlock()
+	clock = clock.Add(10 * time.Minute)
+	tr.SyncOnce(ctx)
+	clock = clock.Add(10 * time.Minute)
+	tr.SyncOnce(ctx)
+	if n := repos.called("pull " + vex.URL); n != 3 {
+		t.Errorf("the merged reply read %d times, want 3", n)
+	}
+	tr.EvaluateOnce(ctx)
+	snap, _ = tr.Snapshot()
+	if p := snap.Findings[0].Pipeline; len(p.VEXPRs) != 1 || p.VEXPRs[0].State != github.StateMerged {
+		t.Errorf("after the merge: %+v", p)
 	}
 }
