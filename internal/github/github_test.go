@@ -72,9 +72,22 @@ func server(t *testing.T, wantToken string) *httptest.Server {
 			return
 		}
 		_, _ = w.Write([]byte(`[
-  {"html_url": "https://github.com/yuanying/fleet-infra/pull/9", "title": "Update quay.io/kiwigrid/k8s-sidecar Docker tag to v2.15.0", "body": "x", "user": {"login": "renovate-y[bot]"}},
+  {"html_url": "https://github.com/yuanying/fleet-infra/pull/9", "number": 9, "state": "open", "title": "Update quay.io/kiwigrid/k8s-sidecar Docker tag to v2.15.0", "body": "x", "user": {"login": "renovate-y[bot]"}, "head": {"ref": "renovate/k8s-sidecar", "sha": "f00"}},
   {"html_url": "https://github.com/yuanying/fleet-infra/pull/8", "title": "Add vuln-tracker", "body": null, "user": {"login": "yuanying"}}
 ]`))
+	}))
+	mux.HandleFunc("GET /repos/yuanying/hshelf/pulls/3", auth(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"html_url": "https://github.com/yuanying/hshelf/pull/3", "number": 3, "state": "closed", "merged_at": "2026-10-28T01:02:03Z", "title": "Bump json", "body": "CVE-2026-33210", "user": {"login": "fraction-vuln-responder[bot]"}, "head": {"ref": "vuln-responder/json", "sha": "b0b"}}`))
+	}))
+	mux.HandleFunc("GET /repos/yuanying/hshelf/pulls/4", auth(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"html_url": "https://github.com/yuanying/hshelf/pull/4", "number": 4, "state": "closed", "merged_at": null, "title": "Try", "body": null, "user": {"login": "yuanying"}, "head": {"ref": "try", "sha": "c0c"}}`))
+	}))
+	mux.HandleFunc("GET /repos/yuanying/fleet-infra/pulls/9/files", auth(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("per_page") != "100" {
+			http.Error(w, "want per_page=100", http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte(`[{"filename": "security/vex/ghcr.io/yuanying/hshelf.openvex.json"}, {"filename": "apps/hshelf/kustomization.yaml"}]`))
 	}))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -126,6 +139,72 @@ func TestOpenPullRequests(t *testing.T) {
 	}
 	if len(prs) != 2 || prs[0].Author != "renovate-y[bot]" || prs[0].URL != "https://github.com/yuanying/fleet-infra/pull/9" || prs[1].Body != "" {
 		t.Errorf("got %+v", prs)
+	}
+	want := PullRequest{
+		URL: "https://github.com/yuanying/fleet-infra/pull/9", Repository: "yuanying/fleet-infra", Number: 9, State: StateOpen,
+		Title: "Update quay.io/kiwigrid/k8s-sidecar Docker tag to v2.15.0", Body: "x", Author: "renovate-y[bot]",
+		HeadRef: "renovate/k8s-sidecar", HeadSHA: "f00",
+	}
+	if prs[0] != want {
+		t.Errorf("got %+v\nwant %+v", prs[0], want)
+	}
+}
+
+// A pull request read by its number says whether it was merged or only
+// closed.
+func TestPullRequest(t *testing.T) {
+	srv := server(t, "")
+	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
+	pr, err := c.PullRequest(context.Background(), "yuanying/hshelf", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pr.State != StateMerged || pr.Repository != "yuanying/hshelf" || pr.Number != 3 || pr.Author != "fraction-vuln-responder[bot]" || pr.HeadRef != "vuln-responder/json" {
+		t.Errorf("got %+v", pr)
+	}
+	pr, err = c.PullRequest(context.Background(), "yuanying/hshelf", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pr.State != StateClosed {
+		t.Errorf("closed without merging: %+v", pr)
+	}
+	if _, err := c.PullRequest(context.Background(), "yuanying/hshelf", 5); err == nil {
+		t.Error("a 404 should be an error")
+	}
+}
+
+func TestPullRequestFiles(t *testing.T) {
+	srv := server(t, "")
+	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
+	files, err := c.PullRequestFiles(context.Background(), "yuanying/fleet-infra", 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 || files[0] != "security/vex/ghcr.io/yuanying/hshelf.openvex.json" || files[1] != "apps/hshelf/kustomization.yaml" {
+		t.Errorf("got %v", files)
+	}
+}
+
+func TestParsePullRequestURL(t *testing.T) {
+	tests := map[string]struct {
+		repo   string
+		number int
+		ok     bool
+	}{
+		"https://github.com/yuanying/hshelf/pull/3":         {"yuanying/hshelf", 3, true},
+		"https://github.com/yuanying/hshelf/pull/3/files":   {"yuanying/hshelf", 3, true},
+		"https://github.com/yuanying/hshelf/pull/3#comment": {"yuanying/hshelf", 3, true},
+		"https://github.com/yuanying/hshelf/issues/3":       {"", 0, false},
+		"https://example.com/yuanying/hshelf/pull/3":        {"", 0, false},
+		"https://github.com/yuanying/hshelf/pull/x":         {"", 0, false},
+		"": {"", 0, false},
+	}
+	for in, want := range tests {
+		repo, n, ok := ParsePullRequestURL(in)
+		if repo != want.repo || n != want.number || ok != want.ok {
+			t.Errorf("%q: got %q %d %v, want %+v", in, repo, n, ok, want)
+		}
 	}
 }
 

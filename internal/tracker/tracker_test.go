@@ -2,6 +2,8 @@ package tracker
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"sync"
@@ -69,8 +71,28 @@ func (f *fakeScanner) Scan(_ context.Context, ref string) (scanner.Set, error) {
 }
 
 type fakeRepos struct {
+	mu    sync.Mutex
 	files map[string]map[string][]byte
 	prs   map[string][]github.PullRequest
+	// pulls are read by URL; prFiles by URL too.
+	pulls   map[string]github.PullRequest
+	prFiles map[string][]string
+	calls   map[string]int
+}
+
+func (f *fakeRepos) count(call string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.calls == nil {
+		f.calls = map[string]int{}
+	}
+	f.calls[call]++
+}
+
+func (f *fakeRepos) called(call string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls[call]
 }
 
 func (f *fakeRepos) Head(_ context.Context, repo, _ string) (string, error) {
@@ -82,7 +104,26 @@ func (f *fakeRepos) Files(_ context.Context, repo, _ string) (map[string][]byte,
 }
 
 func (f *fakeRepos) OpenPullRequests(_ context.Context, repo string) ([]github.PullRequest, error) {
+	f.count("open " + repo)
 	return f.prs[repo], nil
+}
+
+func prURL(repo string, n int) string {
+	return fmt.Sprintf("https://github.com/%s/pull/%d", repo, n)
+}
+
+func (f *fakeRepos) PullRequest(_ context.Context, repo string, n int) (github.PullRequest, error) {
+	f.count("pull " + prURL(repo, n))
+	pr, ok := f.pulls[prURL(repo, n)]
+	if !ok {
+		return github.PullRequest{}, errors.New("404 Not Found")
+	}
+	return pr, nil
+}
+
+func (f *fakeRepos) PullRequestFiles(_ context.Context, repo string, n int) ([]string, error) {
+	f.count("files " + prURL(repo, n))
+	return f.prFiles[prURL(repo, n)], nil
 }
 
 type memStore struct {

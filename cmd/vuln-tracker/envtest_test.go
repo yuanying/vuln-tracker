@@ -76,6 +76,14 @@ func (fakeRepos) OpenPullRequests(context.Context, string) ([]github.PullRequest
 	return nil, nil
 }
 
+func (fakeRepos) PullRequest(context.Context, string, int) (github.PullRequest, error) {
+	return github.PullRequest{}, errors.New("no pull requests here")
+}
+
+func (fakeRepos) PullRequestFiles(context.Context, string, int) ([]string, error) {
+	return nil, nil
+}
+
 // applyManifests creates every object in the YAML files of dir.
 func applyManifests(t *testing.T, c client.Client, dir string) {
 	t.Helper()
