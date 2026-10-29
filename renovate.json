@@ -31,6 +31,12 @@
       "labels": ["trivy-server-version"]
     },
     {
+      "description": "mirror.gcr.io gives no release time, so the two-day wait would hold every trivy update back for good. The wait is skipped for this image alone. A patch still has to pass CI before it merges itself, and a new minor still only opens a pull request, to be merged by hand together with the Trivy server's upgrade (ADR 0003), so a person sees it before it is merged",
+      "matchManagers": ["dockerfile"],
+      "matchPackageNames": ["mirror.gcr.io/aquasec/trivy"],
+      "minimumReleaseAgeBehaviour": "timestamp-optional"
+    },
+    {
       "description": "The image in config/ names the branch, not a version; fleet-infra pins the version",
       "matchManagers": ["kubernetes"],
       "matchPackageNames": ["ghcr.io/yuanying/vuln-tracker"],
