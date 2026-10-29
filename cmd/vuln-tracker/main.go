@@ -32,6 +32,7 @@ import (
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	"github.com/yuanying/vuln-tracker/internal/api"
 	"github.com/yuanying/vuln-tracker/internal/config"
 	"github.com/yuanying/vuln-tracker/internal/digest"
 	"github.com/yuanying/vuln-tracker/internal/github"
@@ -89,6 +90,11 @@ func run(args []string) error {
 	}
 	if err := mgr.Add(t); err != nil {
 		return fmt.Errorf("adding the tracker: %w", err)
+	}
+	if srv := apiServer(cfg, t); srv != nil {
+		if err := mgr.Add(srv); err != nil {
+			return fmt.Errorf("adding the API server: %w", err)
+		}
 	}
 	ctrlmetrics.Registry.MustRegister(&tracker.Collector{DetailSeverities: cfg.DetailSeverities, Snapshot: t.Snapshot, Requests: t.ResponderRequests})
 
@@ -198,6 +204,28 @@ func newResponder(cfg config.Config, log logr.Logger) *responder.Requester {
 		DashboardURL: cfg.DashboardURL,
 		TaskTimeout:  cfg.ResponderTaskTimeout,
 		Log:          log,
+	}
+}
+
+// apiServer serves the JSON API on --api-bind-address, or is nil when that
+// is "0" (ADR 0015). It runs on every replica: one that is not the leader has
+// no snapshot and answers 503.
+func apiServer(cfg config.Config, t *tracker.Tracker) *manager.Server {
+	if cfg.APIAddr == "0" {
+		return nil
+	}
+	var sev []string
+	for _, s := range config.Severities {
+		if cfg.DetailSeverities[s] {
+			sev = append(sev, s)
+		}
+	}
+	srv := &api.Server{Snapshot: t.Snapshot, Severities: sev, VEXBaseURL: cfg.VEXBaseURL}
+	shutdown := 10 * time.Second
+	return &manager.Server{
+		Name:            "api",
+		Server:          &http.Server{Addr: cfg.APIAddr, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second},
+		ShutdownTimeout: &shutdown,
 	}
 }
 

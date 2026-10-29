@@ -76,6 +76,10 @@ spec:
             - name: probes
               containerPort: 8081
               protocol: TCP
+            # The JSON API (ADR 0015), for gated's Ingress.
+            - name: api
+              containerPort: 8082
+              protocol: TCP
           livenessProbe:
             httpGet:
               path: /healthz
