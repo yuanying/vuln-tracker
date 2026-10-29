@@ -174,12 +174,17 @@ func (d *Discoverer) Discover(ctx context.Context, img Image, w World) Candidate
 		c.Origin = stage.SelfBuilt
 	}
 
-	seen := map[string]bool{img.Ref.Digest: true}
+	// A candidate of each kind is kept even when another kind is at the
+	// same digest: git usually names the release or upstream version, and
+	// dropping it would keep the finding from in-git. Scans are keyed by
+	// digest, so the digest is scanned once.
+	seen := map[string]bool{}
 	add := func(r CandidateRef) {
-		if r.Digest == "" || seen[r.Digest] {
+		k := string(r.Kind) + "@" + r.Digest
+		if r.Digest == "" || r.Digest == img.Ref.Digest || seen[k] {
 			return
 		}
-		seen[r.Digest] = true
+		seen[k] = true
 		c.List = append(c.List, r)
 	}
 	resolve := func(tag string) (string, bool) {
