@@ -22,7 +22,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/vuln-tracker ./cmd/vuln-tracker
 
-FROM mirror.gcr.io/aquasec/trivy:0.75.0 AS trivy
+FROM mirror.gcr.io/aquasec/trivy:0.76.1 AS trivy
 
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /
