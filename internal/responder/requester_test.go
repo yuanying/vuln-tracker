@@ -158,7 +158,7 @@ func TestStepOneAtATimeAndDedup(t *testing.T) {
 	f.finish("task-1", "completed", "注釈の PR を出した: https://github.com/yuanying/fleet-infra/pull/240")
 	r.Step(ctx, t0.Add(2*time.Minute), wanted, recs)
 	img = recs["image:index.docker.io/longhornio/longhorn-engine"]
-	if img.State != "completed" || img.PR != "https://github.com/yuanying/fleet-infra/pull/240" || !slices.Equal(img.Asked, []string{"index.docker.io/longhornio/longhorn-engine|CVE-9|openssl"}) {
+	if img.State != "completed" || img.PR != "https://github.com/yuanying/fleet-infra/pull/240" || !slices.Equal(img.Asked, []string{"index.docker.io/longhornio/longhorn-engine|CVE-9|openssl|sha256:ff"}) {
 		t.Errorf("completed record = %+v", img)
 	}
 	if img.Summary != "注釈の PR を出した: https://github.com/yuanying/fleet-infra/pull/240" {
@@ -178,24 +178,43 @@ func TestStepOneAtATimeAndDedup(t *testing.T) {
 		t.Errorf("record = %+v", src)
 	}
 
-	// The same findings in a new digest are not asked again.
-	moved := []Wanted{hshelfWanted(finding(hshelfImage, "CVE-1", "json", "sha256:bb"))}
+	// The same findings in the same digest are not asked again.
 	for i := range 3 {
-		r.Step(ctx, t0.Add(time.Duration(5+i)*time.Minute), moved, recs)
+		r.Step(ctx, t0.Add(time.Duration(5+i)*time.Minute), wanted, recs)
 	}
 	if len(f.sent) != 2 {
 		t.Fatalf("asked again for the same findings: %d", len(f.sent))
+	}
+
+	// The same vulnerability and package in a new digest, still without an
+	// annotation, is asked again in the same context: the annotation did not
+	// reach the new version (ADR 0009).
+	moved := []Wanted{hshelfWanted(finding(hshelfImage, "CVE-1", "json", "sha256:bb"))}
+	r.Step(ctx, t0.Add(8*time.Minute), moved, recs)
+	if len(f.sent) != 3 {
+		t.Fatalf("the new digest was not asked for: sent %d", len(f.sent))
+	}
+	if f.sent[2].ContextID != "ctx-2" {
+		t.Errorf("contextId = %q, want the target's own", f.sent[2].ContextID)
+	}
+	if p := f.lastData(t); len(p.Findings) != 1 || p.Findings[0].Digest != "sha256:bb" {
+		t.Errorf("findings = %+v", p.Findings)
+	}
+	f.finish("task-3", "completed", "VEX の PR: https://github.com/yuanying/fleet-infra/pull/241")
+	r.Step(ctx, t0.Add(9*time.Minute), moved, recs)
+	if src := recs["source:yuanying/hshelf"]; !slices.Equal(src.Asked, []string{hshelfImage + "|CVE-1|json|sha256:aa", hshelfImage + "|CVE-1|json|sha256:bb"}) {
+		t.Errorf("asked = %v", src.Asked)
 	}
 
 	// A new finding asks again, with every finding of the target, in the
 	// same context.
 	grown := []Wanted{hshelfWanted(cve1, finding(hshelfImage, "CVE-2", "openssl", "sha256:aa"))}
 	r.Step(ctx, t0.Add(10*time.Minute), grown, recs)
-	if len(f.sent) != 3 {
+	if len(f.sent) != 4 {
 		t.Fatal("a new finding was not asked for")
 	}
-	if f.sent[2].ContextID != "ctx-2" {
-		t.Errorf("contextId = %q, want the target's own", f.sent[2].ContextID)
+	if f.sent[3].ContextID != "ctx-2" {
+		t.Errorf("contextId = %q, want the target's own", f.sent[3].ContextID)
 	}
 	if p := f.lastData(t); len(p.Findings) != 2 {
 		t.Errorf("findings = %+v", p.Findings)
@@ -235,7 +254,7 @@ func TestStepRetries(t *testing.T) {
 		}
 	}
 	rec = recs[key]
-	if rec.State != "error" || rec.Attempts != 0 || !slices.Equal(rec.Asked, []string{hshelfImage + "|CVE-1|json"}) {
+	if rec.State != "error" || rec.Attempts != 0 || !slices.Equal(rec.Asked, []string{hshelfImage + "|CVE-1|json|sha256:aa"}) {
 		t.Errorf("after giving up: %+v", rec)
 	}
 	f.sendErr = nil
@@ -391,12 +410,23 @@ func TestPayloadShape(t *testing.T) {
 
 func TestFindingKey(t *testing.T) {
 	f := finding(hshelfImage, "CVE-1", "json", "sha256:aa")
+	moved := f
+	moved.Digest, moved.Tag = "sha256:bb", "v2"
+	undigested := f
+	undigested.Digest = ""
 	tests := []struct {
 		f    Finding
 		want string
 	}{
-		{f, hshelfImage + "|CVE-1|json"},
+		// Triage remembers the digest, so a version the annotation does
+		// not reach is asked about again (ADR 0009).
+		{f, hshelfImage + "|CVE-1|json|sha256:aa"},
+		{moved, hshelfImage + "|CVE-1|json|sha256:bb"},
+		{undigested, hshelfImage + "|CVE-1|json"},
+		// A bump's key carries the stage and neither the tag nor the digest
+		// (ADR 0011).
 		{bumped(f, "fixed-in-release", "v1.0.1", "sha256:bb"), hshelfImage + "|CVE-1|json|fixed-in-release"},
+		{bumped(moved, "fixed-in-release", "v1.0.2", "sha256:cc"), hshelfImage + "|CVE-1|json|fixed-in-release"},
 		{bumped(f, "fixed-upstream", "v1.0.1", "sha256:bb"), hshelfImage + "|CVE-1|json|fixed-upstream"},
 	}
 	for _, tc := range tests {
@@ -435,12 +465,15 @@ func TestStepBumpAfterTriage(t *testing.T) {
 	r.Step(ctx, t0.Add(3*time.Minute), released, recs)
 	rec := recs[key]
 	if rec.PR != "https://github.com/yuanying/fleet-infra/pull/250" ||
-		!slices.Equal(rec.Asked, []string{hshelfImage + "|CVE-1|json", hshelfImage + "|CVE-1|json|fixed-in-release"}) {
+		!slices.Equal(rec.Asked, []string{hshelfImage + "|CVE-1|json|fixed-in-release", hshelfImage + "|CVE-1|json|sha256:aa"}) {
 		t.Errorf("record = %+v", rec)
 	}
 
-	// A newer release of the same finding is not asked about again.
-	newer := []Wanted{hshelfWanted(bumped(cve1, "fixed-in-release", "v1.0.2", "sha256:cc"))}
+	// A newer release of the same finding is not asked about again, nor is
+	// a new version of the running image (ADR 0011).
+	moved := cve1
+	moved.Tag, moved.Digest = "v2", "sha256:dd"
+	newer := []Wanted{hshelfWanted(bumped(moved, "fixed-in-release", "v1.0.2", "sha256:cc"))}
 	for i := range 3 {
 		r.Step(ctx, t0.Add(time.Duration(4+i)*time.Minute), newer, recs)
 	}

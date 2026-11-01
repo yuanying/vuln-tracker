@@ -225,7 +225,8 @@ func TestEvaluatePipeline(t *testing.T) {
 	st := state.New()
 	st.Requests["source:yuanying/hshelf"] = state.Request{
 		TargetType: "source", Target: src, PR: reply.URL,
-		Asked: []string{"ghcr.io/yuanying/hshelf|CVE-2026-33210|json"},
+		// A triage key carries the digest (ADR 0009).
+		Asked: []string{"ghcr.io/yuanying/hshelf|CVE-2026-33210|json|" + dGit},
 	}
 	idx := manifests.Index{"ghcr.io/yuanying/hshelf": {{Registry: "ghcr.io", Repository: "yuanying/hshelf", Tag: "1.0.1", Digest: dGit}}}
 	snap := Evaluate(Input{
