@@ -51,8 +51,9 @@ type Request struct {
 	TaskID string `json:"taskId,omitempty"`
 	// State is the task's state, or the tracker's own "error" or "timeout".
 	State string `json:"state,omitempty"`
-	// Asked are the finding keys ("<image>|<vulnerability>|<package>")
-	// already asked about, never to be asked about again.
+	// Asked are the finding keys ("<image>|<vulnerability>|<package>|
+	// <digest or stage>", responder.Finding.Key) already asked about, never
+	// to be asked about again.
 	Asked []string `json:"asked,omitempty"`
 	// Sending are the finding keys in the last request.
 	Sending []string `json:"sending,omitempty"`

@@ -176,7 +176,7 @@ PR は「直すつもり」の印で、直ったかどうかはスキャンで�
 | target | 自作イメージはソースのリポジトリ（例 `yuanying/hshelf`）、それ以外はイメージ（例 `index.docker.io/longhornio/longhorn-engine`） |
 | メッセージ | 人が読む text の part と、`kind` が `vuln-triage/v1` の data の part。`bump` の発見には直った版のタグと digest、どちらにも Renovate の PR の URL を付ける |
 | context | vuln-responder が採番した contextId を target ごとに覚え、次の依頼を同じ context に続ける。知らないと言われたら新しい context で送り直す |
-| 重複 | target ごとに頼んだ発見（イメージ・脆弱性・パッケージ、`bump` はそれに段階）を状態の ConfigMap に覚え、頼んでいない発見が増えたときだけ頼む |
+| 重複 | target ごとに頼んだ発見（イメージ・脆弱性・パッケージに、`triage` は digest、`bump` は段階）を状態の ConfigMap に覚え、頼んでいない発見が増えたときだけ頼む。`triage` は、注釈の当たらない新しい版（digest）に同じ脆弱性が残っていれば頼み直す |
 | 同時に | 1 件まで。Task が終わるまで次を送らない |
 | 失敗 | 10 分から倍にして待ち、5 回目の失敗であきらめる |
 | 返事 | Task の状態と、返事にある PR の URL をメトリクスとダイジェストに出す |

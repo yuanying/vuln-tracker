@@ -53,7 +53,8 @@ func replies(st *state.State, prs map[string]github.PullRequest) map[string][]gi
 			continue
 		}
 		for _, k := range append(slices.Clone(rec.Asked), rec.Sending...) {
-			// A bump's key carries the stage after the package.
+			// A key carries the digest (triage) or the stage (bump) after
+			// the package; records from before v0.4.1 have neither.
 			parts := strings.SplitN(k, "|", 4)
 			if len(parts) < 3 {
 				continue

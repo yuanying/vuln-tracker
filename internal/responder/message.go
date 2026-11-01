@@ -81,14 +81,19 @@ type Finding struct {
 	Workloads   []Workload `json:"workloads"`
 }
 
-// Key is what is remembered as asked: tags and digests do not enter it, so a
-// new version carrying the same vulnerability is not asked about again. A
-// bump's key carries the stage, so a finding is asked about once more as its
-// stage reaches a fixed version.
+// Key is what is remembered as asked, always "<image>|<vulnerability>|
+// <package>" and one more part. A triage's key carries the digest, so a new
+// version the annotation does not reach is asked about again (ADR 0009). A
+// bump's key carries the stage and no tag or digest, so a finding is asked
+// about once more as its stage reaches a fixed version, and not again for a
+// newer version (ADR 0011).
 func (f Finding) Key() string {
 	k := f.Image + "|" + f.VulnerabilityID + "|" + f.Package
-	if f.Trigger == TriggerBump {
+	switch {
+	case f.Trigger == TriggerBump:
 		k += "|" + f.Stage
+	case f.Digest != "":
+		k += "|" + f.Digest
 	}
 	return k
 }
