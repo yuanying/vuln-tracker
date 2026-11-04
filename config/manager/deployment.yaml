@@ -115,7 +115,8 @@ spec:
               mountPath: /var/run/secrets/github-app
               readOnly: true
       volumes:
-        # trivy's temporary files and its Java DB (ADR 0003).
+        # trivy's temporary files and cache. The Java DB is never downloaded:
+        # the scans skip the Java archives (ADR 0003).
         - name: work
           emptyDir:
             sizeLimit: 2Gi

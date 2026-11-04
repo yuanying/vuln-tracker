@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -86,6 +87,65 @@ func TestArgs(t *testing.T) {
 	}
 	if slices.ContainsFunc((&Trivy{}).env(), func(s string) bool { return strings.HasPrefix(s, "TRIVY_TOKEN=") }) {
 		t.Error("an empty token should not be set")
+	}
+}
+
+// skippedPatterns returns the patterns given to --skip-files.
+func skippedPatterns(args []string) []string {
+	var patterns []string
+	for i, a := range args {
+		if a == "--skip-files" && i+1 < len(args) {
+			patterns = append(patterns, args[i+1])
+		}
+	}
+	return patterns
+}
+
+// TestArgsSkipJavaArchives pins that the Java archives never reach trivy's
+// jar analyzer, so trivy never downloads the Java DB (ADR 0003). The patterns
+// are doublestar globs over the path in the image; "**/" matches any
+// directory, so the file name part is checked here with path.Match.
+func TestArgsSkipJavaArchives(t *testing.T) {
+	patterns := skippedPatterns((&Trivy{ServerURL: "http://x"}).args("x@sha256:aaaa"))
+	if len(patterns) == 0 {
+		t.Fatal("no --skip-files in the args")
+	}
+	skipped := func(file string) bool {
+		for _, p := range patterns {
+			name, ok := strings.CutPrefix(p, "**/")
+			if !ok {
+				t.Fatalf("pattern %q does not start with **/", p)
+			}
+			if m, err := path.Match(name, path.Base(file)); err != nil {
+				t.Fatalf("pattern %q: %v", p, err)
+			} else if m {
+				return true
+			}
+		}
+		return false
+	}
+	// trivy 0.76.1's jar analyzer takes these extensions, ignoring case.
+	for _, tc := range []struct {
+		file string
+		want bool
+	}{
+		{"usr/share/java/libintl.jar", true},
+		{"app/app.war", true},
+		{"opt/app.ear", true},
+		{"opt/app.par", true},
+		{"opt/App.JAR", true},
+		{"opt/App.War", true},
+		{"app.jar", true},
+		{"app/Gemfile.lock", false},
+		{"usr/lib/python3/dist-packages/foo.py", false},
+		{"opt/app.jar.sha1", false},
+		{"opt/app.rar", false},
+		{"opt/app.tar", false},
+		{"usr/bin/jar", false},
+	} {
+		if got := skipped(tc.file); got != tc.want {
+			t.Errorf("skipped(%q) = %v, want %v (patterns %v)", tc.file, got, tc.want, patterns)
+		}
 	}
 }
 

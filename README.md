@@ -5,7 +5,7 @@
 ## 何をするか
 
 - Trivy Operator の VulnerabilityReport と Pod を読み、本番で動いている「イメージ × 脆弱性 × パッケージ」（発見）の一覧を作る
-- イメージごとに、直っているかもしれない版（候補）を探し、Trivy Operator の Trivy server にクライアントとして繋いでスキャンする
+- イメージごとに、直っているかもしれない版（候補）を探し、Trivy Operator の Trivy server にクライアントとして繋いでスキャンする。jar・war・ear・par は解析しない（Maven の脆弱性は候補のスキャンに出ない。ADR 0003）
 - 候補のスキャンの結果から、発見ごとに **段階** を決める
 - fleet-infra の `security/vex/` の OpenVEX の注釈を、Trivy と同じ規則で当てる
 - 段階と注釈を Prometheus のメトリクスとして出し、週次のダイジェストを Slack に送る
@@ -109,7 +109,7 @@ PR は「直すつもり」の印で、直ったかどうかはスキャンで�
 | `--state-configmap` | `vuln-tracker-state` | 状態の ConfigMap の名前 |
 | `--trivy-server` | `http://trivy-service.trivy-system:4954` | Trivy server |
 | `--trivy-binary` | `/usr/local/bin/trivy` | trivy のバイナリ |
-| `--trivy-cache-dir` | `/work/cache` | trivy の Java DB の置き場 |
+| `--trivy-cache-dir` | `/work/cache` | trivy のキャッシュのディレクトリ。jar を解析しないので Java DB は落とさない（ADR 0003） |
 | `--trivy-temp-dir` | `/work/tmp` | trivy の一時ファイル。スキャンごとに空にする |
 | `--scan-timeout` | `10m` | 1 本のスキャンの時限 |
 | `--scan-interval` | `1m` | スキャンの後に空ける時間 |

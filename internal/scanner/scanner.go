@@ -69,7 +69,8 @@ type Trivy struct {
 	// Token is the server's token, if it has one. It is passed through the
 	// environment.
 	Token string
-	// CacheDir keeps what the client downloads for itself (the Java DB).
+	// CacheDir is trivy's cache directory. The Java DB that would be kept
+	// here is never downloaded: the Java archives are skipped.
 	CacheDir string
 	// TempDir is where trivy writes its temporary files. It is emptied after
 	// every scan.
@@ -78,6 +79,17 @@ type Trivy struct {
 	Timeout time.Duration
 
 	run func(ctx context.Context, name string, args, env []string) ([]byte, error)
+}
+
+// skippedJavaArchives keeps the Java archives away from trivy's jar analyzer,
+// the extensions it takes in trivy 0.76.1, in any case. The analyzer is what
+// downloads the Java DB, which does not fit in the work area (ADR 0003). The
+// globs are doublestar patterns over the path in the image.
+var skippedJavaArchives = []string{
+	"**/*.[jJ][aA][rR]",
+	"**/*.[wW][aA][rR]",
+	"**/*.[eE][aA][rR]",
+	"**/*.[pP][aA][rR]",
 }
 
 func (t *Trivy) args(ref string) []string {
@@ -89,6 +101,9 @@ func (t *Trivy) args(ref string) []string {
 		"--scanners", "vuln",
 		"--quiet",
 		"--no-progress",
+	}
+	for _, p := range skippedJavaArchives {
+		args = append(args, "--skip-files", p)
 	}
 	if t.CacheDir != "" {
 		args = append(args, "--cache-dir", t.CacheDir)

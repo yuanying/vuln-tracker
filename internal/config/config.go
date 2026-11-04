@@ -87,7 +87,7 @@ func Parse(args []string, getenv func(string) string, extra ...func(*flag.FlagSe
 	fs.StringVar(&c.StateConfigMap, "state-configmap", "vuln-tracker-state", "Name of the ConfigMap the state is kept in.")
 	fs.StringVar(&c.TrivyBinary, "trivy-binary", "/usr/local/bin/trivy", "Path of the trivy binary.")
 	fs.StringVar(&c.TrivyServer, "trivy-server", "http://trivy-service.trivy-system:4954", "URL of the Trivy server.")
-	fs.StringVar(&c.TrivyCacheDir, "trivy-cache-dir", "/work/cache", "Directory trivy keeps the Java DB in.")
+	fs.StringVar(&c.TrivyCacheDir, "trivy-cache-dir", "/work/cache", "trivy's cache directory. The scans skip the Java archives, so the Java DB is not downloaded.")
 	fs.StringVar(&c.TrivyTempDir, "trivy-temp-dir", "/work/tmp", "Directory trivy writes temporary files to; emptied after every scan.")
 	fs.DurationVar(&c.ScanTimeout, "scan-timeout", 10*time.Minute, "Time limit of one scan.")
 	fs.DurationVar(&c.ScanInterval, "scan-interval", time.Minute, "Pause after each scan.")
