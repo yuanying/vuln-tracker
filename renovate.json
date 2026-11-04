@@ -1,9 +1,9 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Same policy as gated: patch, digest and pin updates merge themselves once CI passes; the rest only open a pull request",
+  "description": "Same policy as gated: every update gets GitHub's auto-merge and is merged once a code owner approves it and CI passes, except a new trivy minor or major, which is merged by hand",
   "extends": [
     "github>yuanying/renovate-config",
-    "github>yuanying/renovate-config:automerge-patch"
+    "github>yuanying/renovate-config:platform-automerge"
   ],
   "postUpdateOptions": ["gomodTidy"],
   "kubernetes": {
@@ -31,7 +31,7 @@
       "labels": ["trivy-server-version"]
     },
     {
-      "description": "mirror.gcr.io gives no release time, so the two-day wait would hold every trivy update back for good. The wait is skipped for this image alone. A patch still has to pass CI before it merges itself, and a new minor still only opens a pull request, to be merged by hand together with the Trivy server's upgrade (ADR 0003), so a person sees it before it is merged",
+      "description": "mirror.gcr.io gives no release time, so the two-day wait would hold every trivy update back for good. The wait is skipped for this image alone. A patch still has to be approved and pass CI before it is merged, and a new minor still only opens a pull request, to be merged by hand together with the Trivy server's upgrade (ADR 0003), so a person sees it before it is merged",
       "matchManagers": ["dockerfile"],
       "matchPackageNames": ["mirror.gcr.io/aquasec/trivy"],
       "minimumReleaseAgeBehaviour": "timestamp-optional"
