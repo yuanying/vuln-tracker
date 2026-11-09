@@ -1,11 +1,11 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Same policy as gated: every update gets GitHub's auto-merge and is merged once a code owner approves it and CI passes, except a new trivy minor or major, which is merged by hand",
+  "description": "Same policy as gated: every update gets GitHub's auto-merge and is merged once a code owner approves it and CI passes, except a new trivy minor or major, which is merged by hand. gomodTidy runs go mod tidy after every Go update, and gomodUpdateImportPaths lets a major Go module update rewrite the import paths; without it Renovate skips go mod tidy on major updates and leaves go.mod untidy",
   "extends": [
     "github>yuanying/renovate-config",
     "github>yuanying/renovate-config:platform-automerge"
   ],
-  "postUpdateOptions": ["gomodTidy"],
+  "postUpdateOptions": ["gomodTidy", "gomodUpdateImportPaths"],
   "kubernetes": {
     "managerFilePatterns": ["config/**/*.yaml"]
   },
