@@ -6,28 +6,27 @@
 ## Context
 
 vuln-responder（fraction-agents の係）は、自作のイメージのソースのリポジトリに PR を出して直す（ADR 0009・0011）。
-vuln-responder が書けるリポジトリは、次の 2 か所に手で書いてある。
+vuln-responder の GitHub App（`fraction-vuln-responder`）のインストール先は持ち主の All repositories なので、
+App の資格の上では持ち主のどのリポジトリにも書ける。vuln-responder が実際に書けるのは、fleet-infra の
+`apps/fraction-agents/prod/vuln-responder/github-writer.json` の `repositories` に絞ったリポジトリだけである。
+書ける一覧は、この 1 か所に手で書いてある。
 
-- fleet-infra の `apps/fraction-agents/prod/vuln-responder/github-writer.json` の `repositories`
-- vuln-responder の GitHub App（`fraction-vuln-responder`）の installation で選んだリポジトリ
-
-自作のイメージを増やしたとき、どちらかへの入れ忘れが起きる。入れ忘れたリポジトリへの依頼は、
+自作のイメージを増やしたとき、この一覧への入れ忘れが起きる。入れ忘れたリポジトリへの依頼は、
 vuln-responder が PR を出せずに終わるので、気づくのが遅れる。アーカイブ済みのリポジトリも同じく、PR を出せない。
 
 集計役は、本番で動く自作のイメージのソースのリポジトリを、イメージのラベル `org.opencontainers.image.source` と
 `security/image-sources.yaml` から知っている（ADR 0002、`vuln_tracker_image_info` の `self_built`・`source`）。
 そのため、漏れは集計役の側で見つけられる。
 
-vuln-responder の App の installation が選んだリポジトリは、その App の鍵が無いと読めない。
-鍵を集計役に渡すと、書ける資格を書き手の係だけに閉じ込める fraction-agents の隔離（fraction-agents の ADR 0027）を壊し、
-集計役の資格は読み取りだけ（ADR 0007）という決定にも反する。
-
 ## Decision
 
 ### 何を「書ける」とみなすか
 
-- fleet-infra の github-writer.json を、**vuln-responder が書ける一覧** として読む。installation は読まない
-- installation と github-writer.json が一致していることは、人（ユーザー）が保つ。集計役はこのずれを見つけない
+- fleet-infra の github-writer.json を、**vuln-responder が書ける一覧** として読む。installation は All repositories なので、
+  書ける範囲を決めているのはこの一覧だけであり、集計役はこれを読めば足りる
+- responder の App の installation は読まない。読む必要が無いうえ、読むにはその App の鍵が要る。鍵を集計役に渡すことは、
+  書ける資格を書き手の係だけに閉じ込める fraction-agents の隔離（fraction-agents の ADR 0027）を壊し、
+  集計役の資格は読み取りだけ（ADR 0007）という決定にも反する
 - 読むのは `repositories` の各要素の `owner` と `name` だけで、ほかのキーは無視する。名前の大文字小文字は区別しない
 
 ### 設定
@@ -76,7 +75,8 @@ archived の読みは、ソースのリポジトリの数だけ 1 時間に 1 �
 ## Consequences
 
 - 自作のイメージを増やして github-writer.json に入れ忘れると、1 時間ほどでアラートが鳴る
-- installation への入れ忘れは見つけられない。github-writer.json に足したときは installation にも足すことを、人が覚えておく
+- installation を All repositories から選んだリポジトリに戻すと、github-writer.json にあっても書けないリポジトリが生じ、
+  集計役はそれを見つけられない。戻すときはこの ADR を直す
 - github-writer.json の path が変われば、fleet-infra のフラグも直す。path を誤ると、読めないエラーが増え続ける
   （一度も読めていなければ `not-writable` は出ない）
 - アーカイブしたリポジトリのイメージを本番で動かし続ける限り、`archived` は鳴り続ける。イメージを置き換えるか、ルールの側で除く
