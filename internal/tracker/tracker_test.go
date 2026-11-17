@@ -79,6 +79,9 @@ type fakeRepos struct {
 	pulls   map[string]github.PullRequest
 	prFiles map[string][]string
 	calls   map[string]int
+	// heads overrides a repository's head, so its files are read again.
+	heads    map[string]string
+	archived map[string]bool
 }
 
 func (f *fakeRepos) count(call string) {
@@ -97,11 +100,29 @@ func (f *fakeRepos) called(call string) int {
 }
 
 func (f *fakeRepos) Head(_ context.Context, repo, _ string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if h := f.heads[repo]; h != "" {
+		return h, nil
+	}
 	return "sha-" + repo, nil
 }
 
 func (f *fakeRepos) Files(_ context.Context, repo, _ string) (map[string][]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return f.files[repo], nil
+}
+
+func (f *fakeRepos) Archived(_ context.Context, repo string) (bool, error) {
+	f.count("archived " + repo)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	a, ok := f.archived[repo]
+	if !ok {
+		return false, errors.New("404 Not Found")
+	}
+	return a, nil
 }
 
 func (f *fakeRepos) OpenPullRequests(_ context.Context, repo string) ([]github.PullRequest, error) {

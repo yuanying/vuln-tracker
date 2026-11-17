@@ -160,6 +160,9 @@ type Snapshot struct {
 	// Synced says the repositories and the registries had been read once
 	// before this evaluation, so its findings are not all pending.
 	Synced bool
+	// CoverageGaps are the sources vuln-responder cannot fix (ADR 0016);
+	// none when the check is off.
+	CoverageGaps []CoverageGap
 }
 
 // RepoIndex is the image versions one manifest repository names.

@@ -81,10 +81,11 @@ PR は「直すつもり」の印で、直ったかどうかはスキャンで�
 | `vuln_tracker_image_renovate_pr_info` | `image` `url` | 1 |
 | `vuln_tracker_scans_total` | `result` | スキャンの本数 |
 | `vuln_tracker_scan_duration_seconds` | | スキャンの所要時間（histogram） |
-| `vuln_tracker_sync_timestamp_seconds` | `target`（`fleet-infra` `k8s-manifests-fraction` `registry` `pull-requests`） | 最後に読めた時刻 |
+| `vuln_tracker_sync_timestamp_seconds` | `target`（`fleet-infra` `k8s-manifests-fraction` `registry` `pull-requests` `repositories`） | 最後に読めた時刻 |
 | `vuln_tracker_sync_errors_total` | `target`（上に `vex` を加える） | 読めなかった回数 |
 | `vuln_tracker_digest_sent_timestamp_seconds` | | 最後にダイジェストを送れた時刻 |
 | `vuln_tracker_responder_request_info` | `target` `target_type` `state` `pr` | vuln-responder への依頼の状態が最後に変わった時刻。target ごとに 1 系列 |
+| `vuln_tracker_responder_coverage_gap` | `source_repository` `reason` | 1。vuln-responder が直せない自作のソースのリポジトリ。`--responder-writer-config` を与えたときだけ |
 
 | ラベル | 値 |
 |---|---|
@@ -95,6 +96,7 @@ PR は「直すつもり」の印で、直ったかどうかはスキャンで�
 | `candidate` | `main` `release` `upstream` `git` |
 | `result` | `scanned` `failed` `pending` |
 | `target_type` | `source`（自作イメージのソースのリポジトリ）`image`（外のイメージ） |
+| `reason` | `not-writable`（github-writer.json に無い）`archived`（GitHub でアーカイブ済み） |
 | `state`（依頼） | A2A の Task の状態（`submitted` `working` `completed` `failed` `rejected` `canceled` など）か、集計役の `error`（送れなかった）`timeout`（待つのをやめた） |
 
 即時のアラート「注釈も対応もない、新しい、修正版のある Critical」の式の例は ADR 0005 にある。理由の文はメトリクスに出さない。ダッシュボードでは `image` から fleet-infra の VEX のファイルへリンクする。
@@ -136,6 +138,7 @@ PR は「直すつもり」の印で、直ったかどうかはスキャンで�
 | `--responder-new-within` | `168h` | 依頼する「新しい」の窓 |
 | `--responder-task-timeout` | `3h` | Task を待つ上限 |
 | `--responder-poll-interval` | `1m` | 依頼を送るか Task を見に行く間隔 |
+| `--responder-writer-config` | （なし） | `--fleet-infra` の中の vuln-responder の github-writer.json の path。空なら直せないソースを検査しない |
 
 ### 要る Secret
 
@@ -182,6 +185,17 @@ PR は「直すつもり」の印で、直ったかどうかはスキャンで�
 | 返事 | Task の状態と、返事にある PR の URL をメトリクスとダイジェストに出す |
 
 有効にするには、Deployment に `--responder-url` を足し、vuln-responder の受け付ける呼び出し元に `system:serviceaccount:vuln-tracker:vuln-tracker` を足す。token の volume は `config/` に入っている。
+
+### 直せないソースの検査
+
+`--responder-writer-config` を与えると、本番で動く自作のイメージのソースのリポジトリごとに、vuln-responder が直せるかを調べて `vuln_tracker_responder_coverage_gap` に出す（[ADR 0016](docs/adr/0016-checking-what-vuln-responder-cannot-fix.md)）。依頼の振る舞いは変えない。
+
+| reason | 条件 | 読み方 |
+|---|---|---|
+| `not-writable` | github-writer.json の `repositories` に無い | fleet-infra の定期読みで読む。読めなければ前の一覧を保つ（`vuln_tracker_sync_errors_total{target="vex"}`） |
+| `archived` | GitHub でアーカイブ済み | `GET /repos/{owner}/{repo}` をリポジトリごとに 1 時間に 1 回。読めなければ前の値を保つ（`target="repositories"`） |
+
+vuln-responder の App の installation は読まない（その App の鍵が要るため）。installation と github-writer.json の一致は人が保つ。
 
 ## デプロイ
 

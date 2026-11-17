@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -57,6 +58,8 @@ type Repositories interface {
 	PullRequest(ctx context.Context, repo string, number int) (PullRequest, error)
 	// PullRequestFiles lists the paths a pull request changes.
 	PullRequestFiles(ctx context.Context, repo string, number int) ([]string, error)
+	// Archived says whether a repository is archived.
+	Archived(ctx context.Context, repo string) (bool, error)
 }
 
 // Client talks to the GitHub REST API. Token, if set, needs only read access
@@ -65,6 +68,9 @@ type Client struct {
 	BaseURL string
 	Token   string
 	HTTP    *http.Client
+	// Keep are paths kept from a tarball besides the manifests and VEX
+	// documents, such as vuln-responder's github-writer.json (ADR 0016).
+	Keep []string
 }
 
 var _ Repositories = (*Client)(nil)
@@ -114,7 +120,10 @@ func (c *Client) Head(ctx context.Context, repo, branch string) (string, error) 
 }
 
 // keep says whether a file of the tarball is one the tracker reads.
-func keep(p string) bool {
+func (c *Client) keep(p string) bool {
+	if slices.Contains(c.Keep, p) {
+		return true
+	}
 	switch path.Ext(p) {
 	case ".yaml", ".yml":
 		return true
@@ -149,7 +158,7 @@ func (c *Client) Files(ctx context.Context, repo, sha string) (map[string][]byte
 		}
 		// Drop the top directory GitHub names after the commit.
 		_, rel, ok := strings.Cut(hdr.Name, "/")
-		if !ok || !keep(rel) {
+		if !ok || !c.keep(rel) {
 			continue
 		}
 		b, err := io.ReadAll(io.LimitReader(tr, maxFileSize))
@@ -244,6 +253,17 @@ func (c *Client) PullRequestFiles(ctx context.Context, repo string, number int) 
 		files = append(files, f.Filename)
 	}
 	return files, nil
+}
+
+// Archived implements Repositories.
+func (c *Client) Archived(ctx context.Context, repo string) (bool, error) {
+	var raw struct {
+		Archived bool `json:"archived"`
+	}
+	if err := c.getJSON(ctx, "/repos/"+repo, &raw); err != nil {
+		return false, err
+	}
+	return raw.Archived, nil
 }
 
 // ParsePullRequestURL reads the repository and number from a pull request's

@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -104,5 +105,22 @@ func TestNewGitHub(t *testing.T) {
 	}
 	if _, err := newGitHub(cfg); err == nil {
 		t.Error("a missing key was accepted")
+	}
+}
+
+// --responder-writer-config names a JSON file in fleet-infra; the GitHub
+// client keeps it from the tarball so it can be read (ADR 0016).
+func TestNewGitHubKeepsTheWriterConfig(t *testing.T) {
+	const writer = "apps/fraction-agents/prod/vuln-responder/github-writer.json"
+	cfg, err := config.Parse([]string{"--namespace=x", "--responder-writer-config=" + writer}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := newGitHub(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(c.Keep, []string{writer}) {
+		t.Errorf("Keep = %v", c.Keep)
 	}
 }

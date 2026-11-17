@@ -91,6 +91,10 @@ type Config struct {
 	// ResponderPollInterval is how often a request is sent or its task
 	// looked at. Zero is LoopInterval.
 	ResponderPollInterval time.Duration
+	// ResponderWriterConfig is the path in FleetInfra of vuln-responder's
+	// github-writer.json. Empty: what vuln-responder cannot fix is not
+	// checked (ADR 0016).
+	ResponderWriterConfig string
 }
 
 // Tracker runs the loops. It is one manager Runnable (ADR 0001).
@@ -125,9 +129,13 @@ type Tracker struct {
 	// The pull requests linked by the two axes (ADR 0014): open ones by
 	// repository, vuln-responder's replies by URL, and what the files of
 	// manifest pull requests said, by URL.
-	openPRs     map[string][]github.PullRequest
-	replies     map[string]github.PullRequest
-	prFiles     map[string]prFiles
+	openPRs map[string][]github.PullRequest
+	replies map[string]github.PullRequest
+	prFiles map[string]prFiles
+	// What vuln-responder can write, nil until read, and whether each
+	// self-built image's source is archived (ADR 0016).
+	writable    responder.Writable
+	archived    map[string]archivedRead
 	synced      bool
 	lastGit     time.Time
 	snapshot    Snapshot
@@ -155,6 +163,7 @@ func (t *Tracker) init() {
 		t.openPRs = map[string][]github.PullRequest{}
 		t.replies = map[string]github.PullRequest{}
 		t.prFiles = map[string]prFiles{}
+		t.archived = map[string]archivedRead{}
 	}
 	if t.trigger == nil {
 		t.trigger = make(chan struct{}, 1)
@@ -239,6 +248,13 @@ func (t *Tracker) EvaluateOnce(ctx context.Context) {
 		PullRequests:  PullRequests{Open: t.openPRs, Replies: t.replies, VEXOnly: vexOnly, Renovate: renovate},
 		Synced:        t.synced,
 	})
+	if t.ResponderWriterConfig != "" {
+		archived := make(map[string]bool, len(t.archived))
+		for repo, a := range t.archived {
+			archived[repo] = a.archived
+		}
+		t.snapshot.CoverageGaps = CoverageGaps(t.snapshot.Images, t.writable, archived)
+	}
 	t.hasSnapshot = true
 	t.stateDirty = true
 	save := t.lastSave.IsZero() || now.Sub(t.lastSave) >= stateSaveInterval
@@ -319,6 +335,9 @@ func (t *Tracker) SyncOnce(ctx context.Context) {
 
 	if gitDue {
 		t.syncPullRequests(ctx, images, cands)
+	}
+	if t.ResponderWriterConfig != "" {
+		t.syncArchived(ctx, images, cands)
 	}
 
 	t.mu.Lock()
@@ -406,6 +425,16 @@ func (t *Tracker) syncGit(ctx context.Context) World {
 			}
 		} else {
 			w.Sources = tbl
+		}
+		if t.ResponderWriterConfig != "" {
+			if w, err := responder.ParseWriterConfig(fleet[t.ResponderWriterConfig]); err != nil {
+				t.Log.Error(err, "reading vuln-responder's github-writer.json; keeping the previous list", "path", t.ResponderWriterConfig)
+				if t.Metrics != nil {
+					t.Metrics.SyncErrors.WithLabelValues("vex").Inc()
+				}
+			} else {
+				t.writable = w
+			}
 		}
 		set, errs := annotation.Load(fleet)
 		for _, err := range errs {

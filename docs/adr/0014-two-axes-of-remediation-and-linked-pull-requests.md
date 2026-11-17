@@ -148,6 +148,11 @@ App を作る前に `GITHUB_TOKEN` の PAT で動かす場合も、PAT の上限
 （ただし PAT の対象に入っていない private のソースのリポジトリは読めず、`pull-requests` のエラーに数える）。
 資格なし（匿名、1 時間 60 回）では、ソースのリポジトリを読むだけで上限を超えるので、資格を置くこと。
 
+#### 追記（2026-11-17、ADR 0016）
+
+`--responder-writer-config` を与えると、ソースのリポジトリがアーカイブ済みか（`GET /repos/{repo}`）を、リポジトリごとに 1 時間に 1 回読む。
+13 リポジトリで 1 時間 13 回増え、合計は **273 以下** になる。github-writer.json は fleet-infra の tarball から読むので、読みは増えない。
+
 ### メトリクス
 
 2 軸はメトリクスには出さない。出口は ADR 0015 の JSON の API である。ADR 0005 の系列とラベル（`stage` を含む）は変えない。
@@ -169,3 +174,4 @@ App を作る前に `GITHUB_TOKEN` の PAT で動かす場合も、PAT の上限
 - [[0009-requesting-triage-from-vuln-responder]]
 - [[0013-a-dedicated-github-app]]
 - [[0015-json-api-contract]]
+- [[0016-checking-what-vuln-responder-cannot-fix]]

@@ -87,6 +87,8 @@ func (fakeRepos) PullRequestFiles(context.Context, string, int) ([]string, error
 	return nil, nil
 }
 
+func (fakeRepos) Archived(context.Context, string) (bool, error) { return false, nil }
+
 // applyManifests creates every object in the YAML files of dir.
 func applyManifests(t *testing.T, c client.Client, dir string) {
 	t.Helper()

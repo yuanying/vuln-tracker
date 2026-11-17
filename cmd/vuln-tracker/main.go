@@ -134,8 +134,12 @@ func managerOptions(cfg config.Config) ctrl.Options {
 // anonymously and miss every private repository.
 func newGitHub(cfg config.Config) (*github.Client, error) {
 	hc := &http.Client{Timeout: 2 * time.Minute}
+	var keep []string
+	if cfg.ResponderWriterConfig != "" {
+		keep = []string{cfg.ResponderWriterConfig}
+	}
 	if cfg.GitHubAppID == 0 {
-		return &github.Client{Token: cfg.GitHubToken, HTTP: hc}, nil
+		return &github.Client{Token: cfg.GitHubToken, HTTP: hc, Keep: keep}, nil
 	}
 	key, err := os.ReadFile(cfg.GitHubAppPrivateKeyFile)
 	if err != nil {
@@ -146,7 +150,7 @@ func newGitHub(cfg config.Config) (*github.Client, error) {
 		return nil, err
 	}
 	hc.Transport = &githubapp.Transport{Source: tokens}
-	return &github.Client{HTTP: hc}, nil
+	return &github.Client{HTTP: hc, Keep: keep}, nil
 }
 
 func newTracker(mgr manager.Manager, cfg config.Config, gh *github.Client) *tracker.Tracker {
@@ -188,6 +192,7 @@ func newTracker(mgr manager.Manager, cfg config.Config, gh *github.Client) *trac
 
 			ResponderNewWithin:    cfg.ResponderNewWithin,
 			ResponderPollInterval: cfg.ResponderPollInterval,
+			ResponderWriterConfig: cfg.ResponderWriterConfig,
 		},
 	}
 }
