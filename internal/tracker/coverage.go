@@ -20,8 +20,9 @@ const (
 	GapNotWritable = "not-writable"
 )
 
-// archivedTTL is how long a read of whether a source is archived stands.
-// Archiving is rare, and the alert waits an hour anyway.
+// archivedTTL is how long a source waits after a try at reading whether it
+// is archived, whether the try worked or not. Archiving is rare, and the
+// alert waits an hour anyway.
 const archivedTTL = time.Hour
 
 // syncTargetRepositories is the `target` label of the reads of whether the
@@ -36,8 +37,12 @@ type CoverageGap struct {
 	Reason           string
 }
 
+// archivedRead is what is known of whether a source is archived.
 type archivedRead struct {
-	at       time.Time
+	// tried is when it was last asked, whether that worked or not.
+	tried time.Time
+	// archived is the answer of the last read that worked; false until one
+	// has.
 	archived bool
 }
 
@@ -68,8 +73,9 @@ func CoverageGaps(images []ImageView, writable responder.Writable, archived map[
 }
 
 // syncArchived reads whether each self-built image's source is archived,
-// when the last read is older than archivedTTL. A read that fails keeps the
-// last one; the sources no longer running are forgotten.
+// when the last try is older than archivedTTL. A read that fails keeps the
+// last answer and waits as long as one that works; the sources no longer
+// running are forgotten.
 func (t *Tracker) syncArchived(ctx context.Context, images []Image, cands map[string]Candidates) {
 	now := t.now()
 	sources := map[string]bool{}
@@ -90,7 +96,7 @@ func (t *Tracker) syncArchived(ctx context.Context, images []Image, cands map[st
 	}
 	var due []string
 	for _, repo := range slices.Sorted(maps.Keys(sources)) {
-		if a, ok := t.archived[repo]; !ok || now.Sub(a.at) >= archivedTTL {
+		if a, ok := t.archived[repo]; !ok || now.Sub(a.tried) >= archivedTTL {
 			due = append(due, repo)
 		}
 	}
@@ -102,14 +108,18 @@ func (t *Tracker) syncArchived(ctx context.Context, images []Image, cands map[st
 	failed := 0
 	for _, repo := range due {
 		archived, err := t.GitHub.Archived(ctx, repo)
-		if err != nil {
-			t.Log.Error(err, "reading whether a source repository is archived", "repository", repo)
-			failed++
-			continue
-		}
 		t.mu.Lock()
-		t.archived[repo] = archivedRead{at: now, archived: archived}
+		a := t.archived[repo]
+		a.tried = now
+		if err == nil {
+			a.archived = archived
+		}
+		t.archived[repo] = a
 		t.mu.Unlock()
+		if err != nil {
+			t.Log.Error(err, "reading whether a source repository is archived; trying again in an hour", "repository", repo)
+			failed++
+		}
 	}
 	if t.Metrics != nil {
 		if failed > 0 {

@@ -150,7 +150,7 @@ App を作る前に `GITHUB_TOKEN` の PAT で動かす場合も、PAT の上限
 
 #### 追記（2026-11-17、ADR 0016）
 
-`--responder-writer-config` を与えると、ソースのリポジトリがアーカイブ済みか（`GET /repos/{repo}`）を、リポジトリごとに 1 時間に 1 回読む。
+`--responder-writer-config` を与えると、ソースのリポジトリがアーカイブ済みか（`GET /repos/{repo}`）を、リポジトリごとに 1 時間に 1 回読む（読めなかったときも 1 時間は試し直さない）。
 13 リポジトリで 1 時間 13 回増え、合計は **273 以下** になる。github-writer.json は fleet-infra の tarball から読むので、読みは増えない。
 
 ### メトリクス

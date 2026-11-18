@@ -236,3 +236,59 @@ vuln_tracker_responder_coverage_gap{reason="not-writable",source_repository="yua
 		t.Error(err)
 	}
 }
+
+// A source that cannot be read (404, no permission, GitHub down) is not asked
+// again within the hour, so failures keep to the rate limit too.
+func TestTrackerArchivedFirstFailureWaits(t *testing.T) {
+	clock := now
+	repos := &fakeRepos{
+		files:    map[string]map[string][]byte{"yuanying/fleet-infra": {writerPath: []byte(`{"repositories": []}`)}},
+		archived: map[string]bool{}, // every read is a 404
+	}
+	tr := coverageTracker(writerPath, repos, &clock)
+	if err := tr.LoadState(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for range 6 {
+		pass(t, tr)
+		clock = clock.Add(10 * time.Minute)
+	}
+	if n := repos.called("archived yuanying/hshelf"); n != 1 {
+		t.Errorf("a failing read tried %d times in an hour, want 1", n)
+	}
+	pass(t, tr)
+	if n := repos.called("archived yuanying/hshelf"); n != 2 {
+		t.Errorf("a failing read tried %d times after an hour, want 2", n)
+	}
+}
+
+// When the hourly refresh fails, the last value stands and the refresh waits
+// another hour.
+func TestTrackerArchivedRefreshFailureKeepsTheValue(t *testing.T) {
+	clock := now
+	repos := &fakeRepos{
+		files:    map[string]map[string][]byte{"yuanying/fleet-infra": {writerPath: []byte(`{"repositories": [{"owner": "yuanying", "name": "hshelf"}]}`)}},
+		archived: map[string]bool{"yuanying/hshelf": true},
+	}
+	tr := coverageTracker(writerPath, repos, &clock)
+	if err := tr.LoadState(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	pass(t, tr)
+
+	repos.mu.Lock()
+	delete(repos.archived, "yuanying/hshelf")
+	repos.mu.Unlock()
+	clock = clock.Add(time.Hour)
+	for range 6 {
+		got := pass(t, tr)
+		want := []CoverageGap{{SourceRepository: "yuanying/hshelf", Reason: GapArchived}}
+		if !slices.Equal(got, want) {
+			t.Fatalf("gaps after a failed refresh = %v, want %v", got, want)
+		}
+		clock = clock.Add(10 * time.Minute)
+	}
+	if n := repos.called("archived yuanying/hshelf"); n != 2 {
+		t.Errorf("read %d times, want 2: the first and one failed refresh", n)
+	}
+}

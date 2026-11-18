@@ -53,7 +53,8 @@ vuln-responder が PR を出せずに終わるので、気づくのが遅れる�
 
 - 当てはまる reason ごとに `vuln_tracker_responder_coverage_gap{source_repository="owner/name",reason}` を 1 で出す（ADR 0005 の追記）。
   両方なら 2 系列、漏れが無ければ系列を出さない。漏れが直れば次の評価で系列が消える。フラグが空なら何も出さない
-- archived の読みは、リポジトリごとに 1 時間に 1 回までにする。読めなかったときは前の値を保ち、
+- archived の読みは、リポジトリごとに 1 時間に 1 回までにする。間隔は、読めたかどうかを問わず最後に試した時刻から数える。
+  読めなかったとき（404・権限が無い・GitHub の障害）も 1 時間は試し直さず、前に読めた値を保ち、
   `vuln_tracker_sync_errors_total{target="repositories"}` に数える。すべて読めた回は
   `vuln_tracker_sync_timestamp_seconds{target="repositories"}` を進める。一度も読めていないリポジトリはアーカイブされていないとみなす
 - 本番から消えたソースのリポジトリの読みは忘れる
@@ -69,7 +70,7 @@ PrometheusRule は fleet-infra の側で書く（`vuln_tracker_responder_coverag
 
 ### rate limit
 
-archived の読みは、ソースのリポジトリの数だけ 1 時間に 1 回である。ADR 0014 の見積もり（ソースのリポジトリ 13）に
+archived の読みは、読めても読めなくても、ソースのリポジトリの数だけ 1 時間に 1 回である。ADR 0014 の見積もり（ソースのリポジトリ 13）に
 1 時間 13 回を足して 273 回以下、上限（1 時間 5,000 回）の 6% ほどに収まる（ADR 0014 の追記）。
 
 ## Consequences

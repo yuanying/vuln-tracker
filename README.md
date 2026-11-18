@@ -193,7 +193,7 @@ PR は「直すつもり」の印で、直ったかどうかはスキャンで�
 | reason | 条件 | 読み方 |
 |---|---|---|
 | `not-writable` | github-writer.json の `repositories` に無い | fleet-infra の定期読みで読む。読めなければ前の一覧を保つ（`vuln_tracker_sync_errors_total{target="vex"}`） |
-| `archived` | GitHub でアーカイブ済み | `GET /repos/{owner}/{repo}` をリポジトリごとに 1 時間に 1 回。読めなければ前の値を保つ（`target="repositories"`） |
+| `archived` | GitHub でアーカイブ済み | `GET /repos/{owner}/{repo}` をリポジトリごとに 1 時間に 1 回。読めなくても 1 時間は試し直さず、前の値を保つ（`target="repositories"`） |
 
 vuln-responder の App のインストール先は All repositories なので、書ける一覧は github-writer.json だけであり、集計役はそれだけを読む。
 
