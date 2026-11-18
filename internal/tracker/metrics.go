@@ -33,6 +33,9 @@ var (
 	renovateDesc = prometheus.NewDesc("vuln_tracker_image_renovate_pr_info",
 		"An open Renovate pull request that names an image running in production.",
 		[]string{"image", "url"}, nil)
+	coverageGapDesc = prometheus.NewDesc("vuln_tracker_responder_coverage_gap",
+		"A source repository of a self-built image running in production that vuln-responder cannot fix: missing from its github-writer.json (not-writable) or archived on GitHub (archived).",
+		[]string{"source_repository", "reason"}, nil)
 )
 
 // Collector exports the latest snapshot. It is unchecked: the series come
@@ -106,6 +109,9 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			ch <- prometheus.MustNewConstMetric(candidateInfoDesc, prometheus.GaugeValue, at,
 				name, img.Ref.Digest, string(cv.Kind), cv.Tag, cv.Digest, cv.Revision, string(cv.Result))
 		}
+	}
+	for _, g := range snap.CoverageGaps {
+		ch <- prometheus.MustNewConstMetric(coverageGapDesc, prometheus.GaugeValue, 1, g.SourceRepository, g.Reason)
 	}
 	// One series per image and pull request, even when several running
 	// versions of the image name it.

@@ -51,6 +51,9 @@ type Config struct {
 	ResponderNewWithin    time.Duration
 	ResponderTaskTimeout  time.Duration
 	ResponderPollInterval time.Duration
+	// ResponderWriterConfig is vuln-responder's github-writer.json in
+	// FleetInfra (ADR 0016). Empty: not checked.
+	ResponderWriterConfig string
 
 	// The GitHub App whose installation tokens read GitHub (ADR 0013). An
 	// App ID of 0 reads with $GITHUB_TOKEN instead.
@@ -107,6 +110,7 @@ func Parse(args []string, getenv func(string) string, extra ...func(*flag.FlagSe
 	fs.DurationVar(&c.ResponderNewWithin, "responder-new-within", 7*24*time.Hour, "Findings first seen this recently are asked about.")
 	fs.DurationVar(&c.ResponderTaskTimeout, "responder-task-timeout", 3*time.Hour, "How long a vuln-responder task is waited for.")
 	fs.DurationVar(&c.ResponderPollInterval, "responder-poll-interval", time.Minute, "How often a request is sent or its task looked at.")
+	fs.StringVar(&c.ResponderWriterConfig, "responder-writer-config", "", "Path in --fleet-infra of vuln-responder's github-writer.json, the repositories it can write. Empty: what it cannot fix is not checked.")
 	fs.Int64Var(&c.GitHubAppID, "github-app-id", 0, "ID of the GitHub App that reads GitHub. 0: read with $GITHUB_TOKEN instead.")
 	fs.Int64Var(&c.GitHubAppInstallationID, "github-app-installation-id", 0, "ID of the App's installation on the owner of the repositories.")
 	fs.StringVar(&c.GitHubAppPrivateKeyFile, "github-app-private-key-file", "/var/run/secrets/github-app/private-key.pem", "PEM private key of the GitHub App.")

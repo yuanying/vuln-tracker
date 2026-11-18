@@ -1,7 +1,7 @@
 # 0005. メトリクスの契約: 発見ごとの系列と、段階ごとの件数
 
 - Date: 2026-10-27
-- Status: Accepted
+- Status: Accepted（2026-10-29・2026-11-17 に系列を足した。末尾の追記）
 
 ## Context
 
@@ -118,6 +118,19 @@ count by (image) (
 発見ごとの 2 軸（ソース側・マニフェスト側）と結び付いた PR はメトリクスに出さない。JSON の API（ADR 0015）で読む。
 既存の系列とラベル（`stage` を含む）は変えない。
 
+### 追記（2026-11-17、ADR 0016）
+
+vuln-responder が直せない自作のソースのリポジトリの系列を足す。`--responder-writer-config` が空なら出さない。
+
+| 名前 | 種類 | ラベル | 値 |
+|---|---|---|---|
+| `vuln_tracker_responder_coverage_gap` | gauge | `source_repository`（`owner/name`）・`reason`（`not-writable`・`archived`） | 1。reason ごとに 1 系列。漏れが無ければ系列なし |
+
+`vuln_tracker_sync_timestamp_seconds` と `vuln_tracker_sync_errors_total` の `target` に `repositories` を加える。
+ソースのリポジトリがアーカイブ済みかの読みである。github-writer.json が読めないときは `vex` に数える（`security/image-sources.yaml` と同じ）。
+
+既存の系列とラベルは変えない。
+
 ## Consequences
 
 - 発見ごとの系列は Critical と High だけなので、Medium 以下の個々の脆弱性はダッシュボードで
@@ -140,3 +153,4 @@ count by (image) (
 - [[0009-requesting-triage-from-vuln-responder]]
 - [[0014-two-axes-of-remediation-and-linked-pull-requests]]
 - [[0015-json-api-contract]]
+- [[0016-checking-what-vuln-responder-cannot-fix]]

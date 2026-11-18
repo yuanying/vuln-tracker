@@ -40,11 +40,13 @@ func tarball(t *testing.T, files map[string]string) []byte {
 func server(t *testing.T, wantToken string) *httptest.Server {
 	t.Helper()
 	tb := tarball(t, map[string]string{
-		"apps/a/kustomization.yaml":           "images: []",
-		"security/vex/README.md":              "# vex",
-		"security/vex/ghcr.io/a.openvex.json": "{}",
-		"security/image-sources.yaml":         "images: []",
-		"docs/big.bin":                        "binary",
+		"apps/a/kustomization.yaml":                                   "images: []",
+		"security/vex/README.md":                                      "# vex",
+		"security/vex/ghcr.io/a.openvex.json":                         "{}",
+		"security/image-sources.yaml":                                 "images: []",
+		"docs/big.bin":                                                "binary",
+		"apps/fraction-agents/prod/vuln-responder/github-writer.json": `{"repositories": []}`,
+		"apps/other/config.json":                                      "{}",
 	})
 	mux := http.NewServeMux()
 	auth := func(h http.HandlerFunc) http.HandlerFunc {
@@ -75,6 +77,12 @@ func server(t *testing.T, wantToken string) *httptest.Server {
   {"html_url": "https://github.com/yuanying/fleet-infra/pull/9", "number": 9, "state": "open", "title": "Update quay.io/kiwigrid/k8s-sidecar Docker tag to v2.15.0", "body": "x", "user": {"login": "renovate-y[bot]"}, "head": {"ref": "renovate/k8s-sidecar", "sha": "f00"}},
   {"html_url": "https://github.com/yuanying/fleet-infra/pull/8", "title": "Add vuln-tracker", "body": null, "user": {"login": "yuanying"}}
 ]`))
+	}))
+	mux.HandleFunc("GET /repos/yuanying/natsumi-sshd", auth(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"full_name": "yuanying/natsumi-sshd", "archived": true}`))
+	}))
+	mux.HandleFunc("GET /repos/yuanying/hshelf", auth(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"full_name": "yuanying/hshelf", "archived": false}`))
 	}))
 	mux.HandleFunc("GET /repos/yuanying/hshelf/pulls/3", auth(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"html_url": "https://github.com/yuanying/hshelf/pull/3", "number": 3, "state": "closed", "merged_at": "2026-10-28T01:02:03Z", "title": "Bump json", "body": "CVE-2026-33210", "user": {"login": "fraction-vuln-responder[bot]"}, "head": {"ref": "vuln-responder/json", "sha": "b0b"}}`))
@@ -119,6 +127,43 @@ func TestHeadAndFiles(t *testing.T) {
 		if _, ok := files[unwanted]; ok {
 			t.Errorf("kept %s", unwanted)
 		}
+	}
+}
+
+// The files named in Keep are kept besides the manifests and VEX documents,
+// so github-writer.json can be read (ADR 0016); other JSON files are not.
+func TestFilesKeep(t *testing.T) {
+	srv := server(t, "")
+	const writer = "apps/fraction-agents/prod/vuln-responder/github-writer.json"
+	c := &Client{BaseURL: srv.URL, HTTP: srv.Client(), Keep: []string{writer}}
+	files, err := c.Files(context.Background(), "yuanying/fleet-infra", "abc1234def")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(files[writer]) != `{"repositories": []}` {
+		t.Errorf("%s = %q", writer, files[writer])
+	}
+	if _, ok := files["apps/other/config.json"]; ok {
+		t.Error("kept a JSON file not named in Keep")
+	}
+}
+
+// Archived reads whether a repository is archived (ADR 0016).
+func TestArchived(t *testing.T) {
+	srv := server(t, "")
+	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
+	ctx := context.Background()
+	for repo, want := range map[string]bool{"yuanying/natsumi-sshd": true, "yuanying/hshelf": false} {
+		got, err := c.Archived(ctx, repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("Archived(%s) = %v, want %v", repo, got, want)
+		}
+	}
+	if _, err := c.Archived(ctx, "yuanying/missing"); err == nil {
+		t.Error("a 404 should be an error")
 	}
 }
 
